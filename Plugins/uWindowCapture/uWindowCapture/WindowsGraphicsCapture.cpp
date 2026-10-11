@@ -187,6 +187,11 @@ bool WindowsGraphicsCapture::CreatePoolAndSession()
             2,
             size_);
         session_ = pool_.CreateCaptureSession(item_);
+        // Every new session starts with Windows' default, not our cached setting.
+        if (IsCursorCaptureEnabledApiSupported())
+        {
+            session_.IsCursorCaptureEnabled(isCursorCaptureEnabled_.load());
+        }
         session_.StartCapture();
     }, "WindowsGraphicsCapture::CreatePoolAndSession()");
 }
@@ -295,22 +300,23 @@ void WindowsGraphicsCapture::Update(float dt)
 
 void WindowsGraphicsCapture::EnableCursorCapture(bool enabled)
 {
+    std::scoped_lock lock(sessionAndPoolMutex_);
     if (isCursorCaptureEnabled_ == enabled) return;
-
-    isCursorCaptureEnabled_ = enabled;
 
     if (!IsCursorCaptureEnabledApiSupported())
     {
+        isCursorCaptureEnabled_ = enabled;
         Debug::Log("CursorCaptureEnabled API is not available.");
         return;
     }
 
-    std::scoped_lock lock(sessionAndPoolMutex_);
-
-    if (session_) 
+    if (session_ && !CallWinRtApiWithExceptionCheck(
+        [&] { session_.IsCursorCaptureEnabled(enabled); },
+        "WindowsGraphicsCapture::EnableCursorCapture()"))
     {
-        session_.IsCursorCaptureEnabled(enabled);
+        return;
     }
+    isCursorCaptureEnabled_ = enabled;
 }
 
 

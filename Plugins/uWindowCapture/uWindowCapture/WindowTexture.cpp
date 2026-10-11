@@ -441,8 +441,25 @@ bool WindowTexture::CaptureByWindowsGraphicsCapture()
 
     textureWidth_ = wgc->GetWidth();
     textureHeight_ = wgc->GetHeight();
-    offsetX_ = 0;
-    offsetY_ = 0;
+    if (window_->IsDesktop())
+    {
+        offsetX_ = 0;
+        offsetY_ = 0;
+    }
+    else
+    {
+        RECT visible{};
+        const auto result = ::DwmGetWindowAttribute(window_->GetWindowHandle(),
+            DWMWA_EXTENDED_FRAME_BOUNDS, &visible, sizeof(visible));
+        if (FAILED(result))
+        {
+            Debug::Error(__FUNCTION__, " => DwmGetWindowAttribute failed: ", result);
+            return false;
+        }
+        // WGC excludes invisible resize borders. Keep origin and texture size in the same space.
+        offsetX_ = static_cast<UINT>(visible.left) - window_->GetX();
+        offsetY_ = static_cast<UINT>(visible.top) - window_->GetY();
+    }
 
     return true;
 }

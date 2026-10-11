@@ -25,6 +25,9 @@ class WindowsGraphicsCapture;
 
 class WindowTexture
 {
+#ifdef UWC_NATIVE_TESTS
+friend struct CursorRegressionTests;
+#endif
 public:
     explicit WindowTexture(Window* window);
     ~WindowTexture();

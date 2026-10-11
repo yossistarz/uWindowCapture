@@ -18,6 +18,9 @@
 
 class WindowManager
 {
+#ifdef UWC_NATIVE_TESTS
+friend struct CursorRegressionTests;
+#endif
     UWC_SINGLETON(WindowManager)
 
 public:
@@ -60,4 +63,3 @@ private:
     std::vector<Window::Data1> windowDataList_[2];
     mutable std::mutex windowsDataListMutex_;
 };
-

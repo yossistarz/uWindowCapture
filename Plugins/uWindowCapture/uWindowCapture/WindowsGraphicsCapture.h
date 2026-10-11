@@ -16,6 +16,9 @@ class WindowsGraphicsCapture
     : public std::enable_shared_from_this<WindowsGraphicsCapture>
 {
 friend class WindowsGraphicsCaptureManager;
+#ifdef UWC_NATIVE_TESTS
+friend struct CursorRegressionTests;
+#endif
 public:
     static bool IsSupported();
     static bool IsCursorCaptureEnabledApiSupported();
@@ -75,6 +78,9 @@ private:
 
 class WindowsGraphicsCaptureManager final
 {
+#ifdef UWC_NATIVE_TESTS
+friend struct CursorRegressionTests;
+#endif
 public:
     std::shared_ptr<WindowsGraphicsCapture> Create(HWND hWnd);
     std::shared_ptr<WindowsGraphicsCapture> Create(HMONITOR hMonitor);
