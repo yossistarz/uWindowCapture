@@ -7,6 +7,7 @@
 #include <atomic>
 
 #include "Buffer.h"
+#include "UnityTextureReference.h"
 
 
 enum class CaptureMode
@@ -75,7 +76,7 @@ private:
     std::weak_ptr<WindowsGraphicsCapture> windowsGraphicsCapture_;
     bool isPrintWindowFailed_ = false;
 
-    std::atomic<ID3D11Texture2D*> unityTexture_ = nullptr;
+    UnityTextureReference unityTexture_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> sharedTexture_;
     HANDLE sharedHandle_ = nullptr;
     std::mutex sharedTextureMutex_;

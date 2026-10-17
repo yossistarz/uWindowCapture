@@ -85,13 +85,13 @@ bool Cursor::HasUploaded() const
 
 void Cursor::SetUnityTexturePtr(ID3D11Texture2D* ptr)
 {
-    unityTexture_ = ptr;
+    unityTexture_.Set(ptr);
 }
 
 
 ID3D11Texture2D* Cursor::GetUnityTexturePtr() const
 {
-    return unityTexture_;
+    return unityTexture_.Get();
 }
 
 
@@ -255,11 +255,12 @@ bool Cursor::Upload()
 {
     if (!hasCaptured_) return false;
 
-    if (!unityTexture_.load() || buffer_.Empty()) return false;
+    const auto unityTexture = unityTexture_.Acquire();
+    if (!unityTexture || buffer_.Empty()) return false;
 
     {
         D3D11_TEXTURE2D_DESC desc;
-        unityTexture_.load()->GetDesc(&desc);
+        unityTexture->GetDesc(&desc);
         if (desc.Width != GetWidth() || desc.Height != GetHeight())
         {
             Debug::Error(__FUNCTION__, " => Texture size is wrong.");
@@ -272,7 +273,7 @@ bool Cursor::Upload()
 
     std::lock_guard<std::mutex> lock(sharedTextureMutex_);
 
-    sharedTexture_ = uploader->CreateCompatibleSharedTexture(unityTexture_.load());
+    sharedTexture_ = uploader->CreateCompatibleSharedTexture(unityTexture);
     if (!sharedTexture_)
     {
         Debug::Error(__FUNCTION__, " => Shared texture is null.");
@@ -306,9 +307,15 @@ bool Cursor::Render()
 {
     if (!hasCaptured_) return false;
 
-    if (!unityTexture_.load() || !sharedTexture_ || !sharedHandle_) return false;
+    const auto unityTexture = unityTexture_.Acquire();
+    if (!unityTexture) return false;
 
     std::lock_guard<std::mutex> lock(sharedTextureMutex_);
+    if (!sharedTexture_ || !sharedHandle_) return false;
+    D3D11_TEXTURE2D_DESC targetDesc, sharedDesc;
+    unityTexture->GetDesc(&targetDesc);
+    sharedTexture_->GetDesc(&sharedDesc);
+    if (targetDesc.Width != sharedDesc.Width || targetDesc.Height != sharedDesc.Height) return false;
 
     ComPtr<ID3D11DeviceContext> context;
     GetUnityDevice()->GetImmediateContext(&context);
@@ -320,7 +327,7 @@ bool Cursor::Render()
         return false;
     }
 
-    context->CopyResource(unityTexture_.load(), texture.Get());
+    context->CopyResource(unityTexture.Get(), texture.Get());
 
     MessageManager::Get().Add({ MessageType::CursorCaptured, -1, nullptr });
 

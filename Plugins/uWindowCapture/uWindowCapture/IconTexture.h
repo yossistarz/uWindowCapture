@@ -9,6 +9,7 @@
 #include <atomic>
 
 #include "Buffer.h"
+#include "UnityTextureReference.h"
 
 
 class Window;
@@ -16,6 +17,9 @@ class Window;
 
 class IconTexture
 {
+#ifdef UWC_NATIVE_TESTS
+friend struct CursorRegressionTests;
+#endif
 public:
     explicit IconTexture(Window* window);
     ~IconTexture();
@@ -43,7 +47,7 @@ private:
     Window* const window_ = nullptr;
     HICON hIcon_ = nullptr;
 
-    std::atomic<ID3D11Texture2D*> unityTexture_ = nullptr;
+    UnityTextureReference unityTexture_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> sharedTexture_;
     HANDLE sharedHandle_ = nullptr;
     std::mutex sharedTextureMutex_;

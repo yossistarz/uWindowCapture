@@ -256,13 +256,13 @@ UINT IconTexture::GetHeight() const
 
 void IconTexture::SetUnityTexturePtr(ID3D11Texture2D* ptr)
 {
-    unityTexture_ = ptr;
+    unityTexture_.Set(ptr);
 }
 
 
 ID3D11Texture2D* IconTexture::GetUnityTexturePtr() const
 {
-    return unityTexture_;
+    return unityTexture_.Get();
 }
 
 
@@ -347,13 +347,14 @@ bool IconTexture::CaptureOnce()
 
 bool IconTexture::Upload()
 {
-    if (!unityTexture_.load() || buffer_.Empty()) return false;
+    const auto unityTexture = unityTexture_.Acquire();
+    if (!unityTexture || buffer_.Empty()) return false;
 
     std::lock_guard<std::mutex> lock(sharedTextureMutex_);
 
     {
         D3D11_TEXTURE2D_DESC desc;
-        unityTexture_.load()->GetDesc(&desc);
+        unityTexture->GetDesc(&desc);
         if (desc.Width != GetWidth() || desc.Height != GetHeight())
         {
             Debug::Error(__FUNCTION__, " => Texture size is wrong.");
@@ -364,7 +365,7 @@ bool IconTexture::Upload()
     auto& uploader = WindowManager::GetUploadManager();
     if (!uploader) return false;
 
-    sharedTexture_ = uploader->CreateCompatibleSharedTexture(unityTexture_.load());
+    sharedTexture_ = uploader->CreateCompatibleSharedTexture(unityTexture);
     if (!sharedTexture_)
     {
         Debug::Error(__FUNCTION__, " => Shared texture is null.");
@@ -403,9 +404,15 @@ bool IconTexture::UploadOnce()
 
 bool IconTexture::Render()
 {
-    if (!unityTexture_.load() || !sharedTexture_ || !sharedHandle_) return false;
+    const auto unityTexture = unityTexture_.Acquire();
+    if (!unityTexture) return false;
 
     std::lock_guard<std::mutex> lock(sharedTextureMutex_);
+    if (!sharedTexture_ || !sharedHandle_) return false;
+    D3D11_TEXTURE2D_DESC targetDesc, sharedDesc;
+    unityTexture->GetDesc(&targetDesc);
+    sharedTexture_->GetDesc(&sharedDesc);
+    if (targetDesc.Width != sharedDesc.Width || targetDesc.Height != sharedDesc.Height) return false;
 
     ComPtr<ID3D11DeviceContext> context;
     GetUnityDevice()->GetImmediateContext(&context);
@@ -417,7 +424,7 @@ bool IconTexture::Render()
         return false;
     }
 
-    context->CopyResource(unityTexture_.load(), texture.Get());
+    context->CopyResource(unityTexture.Get(), texture.Get());
 
     MessageManager::Get().Add({ MessageType::IconCaptured, window_->GetId(), window_->GetWindowHandle() });
 

@@ -47,13 +47,13 @@ WindowTexture::~WindowTexture()
 
 void WindowTexture::SetUnityTexturePtr(ID3D11Texture2D* ptr)
 {
-    unityTexture_ = ptr;
+    unityTexture_.Set(ptr);
 }
 
 
 ID3D11Texture2D* WindowTexture::GetUnityTexturePtr() const
 {
-    return unityTexture_;
+    return unityTexture_.Get();
 }
 
 
@@ -484,7 +484,8 @@ bool WindowTexture::RecreateSharedTextureIfNeeded()
 {
     UWC_SCOPE_TIMER(RecreateSharedTextureIfNeeded)
 
-    if (!unityTexture_.load()) 
+    const auto unityTexture = unityTexture_.Acquire();
+    if (!unityTexture)
     {
         MessageManager::Get().Add({ MessageType::TextureNullError, window_->GetId(), nullptr });
         return false;
@@ -497,7 +498,7 @@ bool WindowTexture::RecreateSharedTextureIfNeeded()
 
     {
         D3D11_TEXTURE2D_DESC desc;
-        unityTexture_.load()->GetDesc(&desc);
+        unityTexture->GetDesc(&desc);
         if (desc.Width != GetWidth() || desc.Height != GetHeight())
         {
             MessageManager::Get().Add({ MessageType::TextureSizeError, window_->GetId(), nullptr });
@@ -533,7 +534,7 @@ bool WindowTexture::RecreateSharedTextureIfNeeded()
 
     if (shouldUpdateTexture)
     {
-        sharedTexture_ = uploader->CreateCompatibleSharedTexture(unityTexture_.load());
+        sharedTexture_ = uploader->CreateCompatibleSharedTexture(unityTexture);
 
         if (!sharedTexture_)
         {
@@ -621,11 +622,17 @@ bool WindowTexture::UploadByWindowsGraphicsCapture()
 
 bool WindowTexture::Render()
 {
-    if (!unityTexture_.load() || !sharedTexture_ || !sharedHandle_) return false;
+    const auto unityTexture = unityTexture_.Acquire();
+    if (!unityTexture) return false;
 
     UWC_SCOPE_TIMER(Render)
 
     std::lock_guard<std::mutex> lock(sharedTextureMutex_);
+    if (!sharedTexture_ || !sharedHandle_) return false;
+    D3D11_TEXTURE2D_DESC targetDesc, sharedDesc;
+    unityTexture->GetDesc(&targetDesc);
+    sharedTexture_->GetDesc(&sharedDesc);
+    if (targetDesc.Width != sharedDesc.Width || targetDesc.Height != sharedDesc.Height) return false;
 
     ComPtr<ID3D11DeviceContext> context;
     GetUnityDevice()->GetImmediateContext(&context);
@@ -639,7 +646,7 @@ bool WindowTexture::Render()
 
     try
     {
-        context->CopyResource(unityTexture_.load(), texture.Get());
+        context->CopyResource(unityTexture.Get(), texture.Get());
     }
     catch (...)
     {

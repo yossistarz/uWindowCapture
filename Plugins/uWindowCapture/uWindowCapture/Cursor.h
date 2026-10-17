@@ -8,10 +8,14 @@
 
 #include "Buffer.h"
 #include "Thread.h"
+#include "UnityTextureReference.h"
 
 
 class Cursor
 {
+#ifdef UWC_NATIVE_TESTS
+friend struct CursorRegressionTests;
+#endif
 public:
     Cursor();
     ~Cursor();
@@ -40,9 +44,9 @@ private:
 
     ThreadLoop threadLoop_ = { L"Cursor Capture Thread" };
 
-    std::atomic<ID3D11Texture2D*> unityTexture_ = nullptr;
+    UnityTextureReference unityTexture_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> sharedTexture_;
-    HANDLE sharedHandle_;
+    HANDLE sharedHandle_ = nullptr;
     std::mutex sharedTextureMutex_;
 
     Buffer<BYTE> buffer_;

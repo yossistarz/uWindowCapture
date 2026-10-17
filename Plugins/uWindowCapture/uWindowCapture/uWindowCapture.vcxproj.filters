@@ -24,6 +24,7 @@
     <ClInclude Include="Message.h" />
     <ClInclude Include="Singleton.h" />
     <ClInclude Include="Unity.h" />
+    <ClInclude Include="UnityTextureReference.h" />
     <ClInclude Include="CaptureManager.h" />
     <ClInclude Include="UploadManager.h" />
     <ClInclude Include="WindowQueue.h" />

@@ -347,14 +347,21 @@ public class UwcWindow
         if (w <= 0 || h <= 0) return;
 
         if (force || !texture || texture.width != w || texture.height != h) {
-            if (backTexture_) {
-                Object.DestroyImmediate(backTexture_);
-            }
+            Texture2D replacement = null;
             try {
-                backTexture_ = new Texture2D(w, h, TextureFormat.BGRA32, false);
-                Lib.SetWindowTexturePtr(id, backTexture_.GetNativeTexturePtr());
+                replacement = new Texture2D(w, h, TextureFormat.BGRA32, false);
+                var pointer = replacement.GetNativeTexturePtr();
+                if (pointer == System.IntPtr.Zero) {
+                    throw new System.InvalidOperationException("The replacement window texture has no native resource.");
+                }
+                Lib.SetWindowTexturePtr(id, pointer);
+                var previous = backTexture_;
+                backTexture_ = replacement;
+                replacement = null;
                 willTextureSizeChange_ = true;
+                if (previous) Object.DestroyImmediate(previous);
             } catch (System.Exception e) {
+                if (replacement) Object.DestroyImmediate(replacement);
                 Debug.LogError(e.Message);
                 Debug.LogErrorFormat("Width: {0}, Height: {1}", w, h);
             }

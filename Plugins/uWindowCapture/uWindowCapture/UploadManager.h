@@ -13,6 +13,9 @@ class Window;
 
 class UploadManager
 {
+#ifdef UWC_NATIVE_TESTS
+friend struct CursorRegressionTests;
+#endif
 public:
     using DevicePtr = Microsoft::WRL::ComPtr<ID3D11Device>;
     using TexturePtr = Microsoft::WRL::ComPtr<ID3D11Texture2D>;
