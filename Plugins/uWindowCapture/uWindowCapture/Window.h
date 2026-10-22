@@ -84,6 +84,7 @@ public:
 
     void SetCaptureMode(CaptureMode mode);
     CaptureMode GetCaptureMode() const;
+    CaptureMode GetRenderedCaptureMode(ID3D11Texture2D* target) const;
 
     void SetCursorDraw(bool draw);
     bool GetCursorDraw() const;

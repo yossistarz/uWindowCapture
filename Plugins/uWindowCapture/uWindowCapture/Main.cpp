@@ -426,6 +426,12 @@ extern "C"
         return CaptureMode::None;
     }
 
+    UNITY_INTERFACE_EXPORT CaptureMode UNITY_INTERFACE_API UwcGetWindowFrameBackend(int id, ID3D11Texture2D* target)
+    {
+        if (auto window = GetWindow(id)) return window->GetRenderedCaptureMode(target);
+        return CaptureMode::None;
+    }
+
     UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API UwcSetWindowCaptureMode(int id, CaptureMode mode)
     {
         if (auto window = GetWindow(id))

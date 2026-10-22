@@ -38,6 +38,7 @@ public:
 
     void SetCaptureMode(CaptureMode mode);
     CaptureMode GetCaptureMode() const;
+    CaptureMode GetRenderedCaptureMode(ID3D11Texture2D* target) const;
 
     void SetCursorDraw(bool draw);
     bool GetCursorDraw() const;
@@ -62,17 +63,18 @@ public:
 private:
     CaptureMode GetCaptureModeInternal() const;
     bool IsWindowsGraphicsCapture() const;
-    bool CaptureByWin32API();
+    bool CaptureByWin32API(CaptureMode mode);
     void CreateBitmapIfNeeded(HDC hDc, UINT width, UINT height);
     void DeleteBitmap();
-    void DrawCursorByWin32API(HWND hWnd, HDC hDcMem);
+    void DrawCursorByWin32API(HWND hWnd, HDC hDcMem, CaptureMode mode);
     bool CaptureByWindowsGraphicsCapture();
     bool RecreateSharedTextureIfNeeded();
     bool UploadByWin32API();
     bool UploadByWindowsGraphicsCapture();
 
     const Window* const window_;
-    CaptureMode captureMode_ = CaptureMode::Auto;
+    std::atomic<CaptureMode> captureMode_ = CaptureMode::Auto;
+    std::atomic<CaptureMode> capturedMode_ = CaptureMode::Auto;
     std::weak_ptr<WindowsGraphicsCapture> windowsGraphicsCapture_;
     bool isPrintWindowFailed_ = false;
 
@@ -80,6 +82,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> sharedTexture_;
     HANDLE sharedHandle_ = nullptr;
     std::mutex sharedTextureMutex_;
+    CaptureMode sharedCaptureMode_ = CaptureMode::None;
+    mutable std::mutex renderedTextureMutex_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> renderedTexture_;
+    CaptureMode renderedCaptureMode_ = CaptureMode::None;
 
     Buffer<BYTE> buffer_;
     Buffer<BYTE> bufferForGetBuffer_;

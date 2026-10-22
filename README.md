@@ -32,4 +32,14 @@ Run `Tools\Test-NativeCursor.ps1` to exercise real WGC cursor-setting readback b
 The tests also pause inside the actual window/cursor/icon upload paths, clear the texture and drop the caller's reference, then verify the worker retains it until completion. A concurrent real-D3D replacement/clear test checks eventual resource release. `TEXTURE_COST` compares borrowed versus owned `GetDesc` access in a local microbenchmark; it is not an end-to-end frame-latency measurement.
 Real cross-device shared-texture upload/render tests alternate window sizes and verify GPU-readback pixels, including the skipped frame between a target resize and its shared-texture rebuild.
 
+`1.1.0-windowsar.3` also publishes the actual backend of a rendered frame,
+bound to its owned Unity texture target. `UwcGetWindowFrameBackend` returns
+`None` for allocation-only, replaced, cleared or not-yet-rendered targets.
+Managed `frameCaptureMode` / `isFrameReady` use cached target identities, and
+pending replacement textures are not exposed until the native render copy
+matches them. This prevents delayed old capture messages from publishing an
+uninitialized replacement. Frame backend metadata follows the capture/upload
+path, not just the requested `Auto` setting. Native GPU tests verify readiness
+before/after 32 target replacements and backend identity after each render.
+
 The source changes live on `feature/windowsar-cursor-session-bounds`; the corresponding Unity package is published on `windowsar-upm`. Consumers should pin the package's commit rather than a moving branch.

@@ -162,6 +162,8 @@ public static class Lib
     public static extern void SetWindowIconTexturePtr(int id, IntPtr texturePtr);
     [DllImport(name, EntryPoint = "UwcGetWindowCaptureMode")]
     public static extern CaptureMode GetWindowCaptureMode(int id);
+    [DllImport(name, EntryPoint = "UwcGetWindowFrameBackend")]
+    public static extern CaptureMode GetWindowFrameBackend(int id, IntPtr target);
     [DllImport(name, EntryPoint = "UwcSetWindowCaptureMode")]
     public static extern void SetWindowCaptureMode(int id, CaptureMode mode);
     [DllImport(name, EntryPoint = "UwcGetWindowCursorDraw")]

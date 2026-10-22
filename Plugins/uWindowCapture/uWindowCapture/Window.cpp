@@ -338,6 +338,11 @@ CaptureMode Window::GetCaptureMode() const
     return windowTexture_->GetCaptureMode();
 }
 
+CaptureMode Window::GetRenderedCaptureMode(ID3D11Texture2D* target) const
+{
+    return windowTexture_->GetRenderedCaptureMode(target);
+}
+
 
 bool Window::IsJustAdded() const
 {

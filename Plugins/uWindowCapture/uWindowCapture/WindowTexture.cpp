@@ -47,6 +47,12 @@ WindowTexture::~WindowTexture()
 
 void WindowTexture::SetUnityTexturePtr(ID3D11Texture2D* ptr)
 {
+    ComPtr<ID3D11Texture2D> retired;
+    {
+        std::lock_guard<std::mutex> lock(renderedTextureMutex_);
+        retired = std::move(renderedTexture_);
+        renderedCaptureMode_ = CaptureMode::None;
+    }
     unityTexture_.Set(ptr);
 }
 
@@ -66,6 +72,13 @@ void WindowTexture::SetCaptureMode(CaptureMode mode)
 CaptureMode WindowTexture::GetCaptureMode() const
 {
     return captureMode_;
+}
+
+CaptureMode WindowTexture::GetRenderedCaptureMode(ID3D11Texture2D* target) const
+{
+    if (!target) return CaptureMode::None;
+    std::lock_guard<std::mutex> lock(renderedTextureMutex_);
+    return renderedTexture_.Get() == target ? renderedCaptureMode_ : CaptureMode::None;
 }
 
 
@@ -181,18 +194,15 @@ std::shared_ptr<WindowsGraphicsCapture> WindowTexture::GetWindowsGraphicsCapture
 
 bool WindowTexture::Capture()
 {
-    if (IsWindowsGraphicsCapture())
-    {
-        return CaptureByWindowsGraphicsCapture();
-    }
-    else
-    {
-        return CaptureByWin32API();
-    }
+    const auto mode = GetCaptureModeInternal();
+    const bool captured = mode == CaptureMode::WindowsGraphicsCapture ?
+        CaptureByWindowsGraphicsCapture() : CaptureByWin32API(mode);
+    if (captured) capturedMode_ = mode;
+    return captured;
 }
     
 
-bool WindowTexture::CaptureByWin32API()
+bool WindowTexture::CaptureByWin32API(CaptureMode mode)
 {
     auto hWnd = window_->GetWindowHandle();
 
@@ -222,7 +232,7 @@ bool WindowTexture::CaptureByWin32API()
     dpiScaleX_ = std::fmax(static_cast<float>(window_->GetWidth()) / dcWidth, 0.01f);
     dpiScaleY_ = std::fmax(static_cast<float>(window_->GetHeight()) / dcHeight, 0.01f);
 
-    if (GetCaptureModeInternal() == CaptureMode::BitBlt && !window_->IsDesktop())
+    if (mode == CaptureMode::BitBlt && !window_->IsDesktop())
     {
         // Remove frame areas
         const auto frameWidth = window_->GetWidth() - window_->GetClientWidth();
@@ -240,7 +250,7 @@ bool WindowTexture::CaptureByWin32API()
         const UINT preTextureHeight = textureHeight_;
 
         // Remove dropshadow area
-        if (GetCaptureModeInternal() == CaptureMode::PrintWindow)
+        if (mode == CaptureMode::PrintWindow)
         {
             RECT windowRect;
             ::GetWindowRect(hWnd, &windowRect);
@@ -310,7 +320,7 @@ bool WindowTexture::CaptureByWin32API()
 
     int offsetLeft = 0, offsetRight = 0, offsetTop = 0, offsetBottom = 0;
 
-    switch (GetCaptureModeInternal())
+    switch (mode)
     {
         case CaptureMode::PrintWindow:
         {
@@ -345,7 +355,7 @@ bool WindowTexture::CaptureByWin32API()
     // Draw cursor
     if (drawCursor_)
     {
-        DrawCursorByWin32API(hWnd, hDcMem);
+        DrawCursorByWin32API(hWnd, hDcMem, mode);
     }
 
     BITMAPINFOHEADER bmi {};
@@ -371,7 +381,7 @@ bool WindowTexture::CaptureByWin32API()
 }
 
 
-void WindowTexture::DrawCursorByWin32API(HWND hWnd, HDC hDcMem)
+void WindowTexture::DrawCursorByWin32API(HWND hWnd, HDC hDcMem, CaptureMode mode)
 {
     const auto cursorWindow = WindowManager::Get().GetCursorWindow();
     const bool isCursorWindow = cursorWindow && cursorWindow->GetWindowHandle() == window_->GetWindowHandle();
@@ -391,7 +401,7 @@ void WindowTexture::DrawCursorByWin32API(HWND hWnd, HDC hDcMem)
     int localX = pos.x;
     int localY = pos.y;
 
-    switch (GetCaptureModeInternal())
+    switch (mode)
     {
         case CaptureMode::PrintWindow:
         {
@@ -469,7 +479,7 @@ bool WindowTexture::Upload()
 {
     if (!RecreateSharedTextureIfNeeded()) return false;
 
-    if (IsWindowsGraphicsCapture())
+    if ((capturedMode_ == CaptureMode::Auto ? GetCaptureModeInternal() : capturedMode_.load()) == CaptureMode::WindowsGraphicsCapture)
     {
         return UploadByWindowsGraphicsCapture();
     }
@@ -506,7 +516,7 @@ bool WindowTexture::RecreateSharedTextureIfNeeded()
         }
     }
 
-    if (!IsWindowsGraphicsCapture())
+    if ((capturedMode_ == CaptureMode::Auto ? GetCaptureModeInternal() : capturedMode_.load()) != CaptureMode::WindowsGraphicsCapture)
     {
         if (offsetX_ + textureWidth_ > bufferWidth_ || offsetY_ + textureHeight_ > bufferHeight_)
         {
@@ -575,6 +585,7 @@ bool WindowTexture::UploadByWin32API()
         uploader->GetDevice()->GetImmediateContext(&context);
         context->UpdateSubresource(sharedTexture_.Get(), 0, nullptr, start, rawPitch, 0);
         context->Flush();
+        sharedCaptureMode_ = capturedMode_ == CaptureMode::Auto ? GetCaptureModeInternal() : capturedMode_.load();
     }
 
     return true;
@@ -602,6 +613,7 @@ bool WindowTexture::UploadByWindowsGraphicsCapture()
         uploader->GetDevice()->GetImmediateContext(&context);
         context->CopyResource(sharedTexture_.Get(), result.pTexture);
         context->Flush();
+        sharedCaptureMode_ = CaptureMode::WindowsGraphicsCapture;
     }
     catch (...)
     {
@@ -624,6 +636,7 @@ bool WindowTexture::Render()
 {
     const auto unityTexture = unityTexture_.Acquire();
     if (!unityTexture) return false;
+    ComPtr<ID3D11Texture2D> retired;
 
     UWC_SCOPE_TIMER(Render)
 
@@ -651,8 +664,15 @@ bool WindowTexture::Render()
     catch (...)
     {
         Debug::Error(__FUNCTION__, " => CopyResource() threw an exception.");
+        return false;
     }
 
+    {
+        std::lock_guard<std::mutex> ready(renderedTextureMutex_);
+        retired = std::move(renderedTexture_);
+        renderedTexture_ = unityTexture;
+        renderedCaptureMode_ = sharedCaptureMode_;
+    }
     MessageManager::Get().Add({ MessageType::WindowCaptured, window_->GetId(), window_->GetWindowHandle() });
 
     return true;

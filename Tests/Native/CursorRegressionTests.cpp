@@ -229,6 +229,8 @@ struct CursorRegressionTests
             const UINT width = i % 2 == 0 ? 4 : 8;
             auto target = CreateTexture(width, 4);
             capture.SetUnityTexturePtr(target.Get());
+            Check(capture.GetRenderedCaptureMode(target.Get()) == CaptureMode::None,
+                "allocating/replacing a Unity texture does not publish a valid frame");
             capture.textureWidth_ = capture.bufferWidth_ = width;
             capture.textureHeight_ = capture.bufferHeight_ = 4;
             capture.buffer_.ExpandIfNeeded(width * 4 * 4);
@@ -241,6 +243,8 @@ struct CursorRegressionTests
             }
             Check(capture.Upload(), "resized window uploads through the real D3D shared texture");
             Check(capture.Render(), "resized window renders to the current owned Unity texture");
+            Check(capture.GetRenderedCaptureMode(target.Get()) == CaptureMode::BitBlt,
+                "rendered frame identifies its target and actual backend");
             D3D11_TEXTURE2D_DESC desc;
             target->GetDesc(&desc);
             desc.Usage = D3D11_USAGE_STAGING;
@@ -259,6 +263,7 @@ struct CursorRegressionTests
             Check(correct, "GPU readback contains the uploaded pixels after resize/replacement");
         }
         capture.SetUnityTexturePtr(nullptr);
+        Check(capture.GetRenderedCaptureMode(nullptr) == CaptureMode::None, "cleared target has no ready frame");
         Check(!capture.Render(), "cleared Unity target is not rendered");
         printf("TEXTURE_GPU_READBACK replacements=32 checked\n");
     }
