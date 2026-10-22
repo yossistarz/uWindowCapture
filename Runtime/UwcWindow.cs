@@ -237,6 +237,15 @@ public class UwcWindow
     }
 
     private Texture2D backTexture_;
+    private System.IntPtr texturePointer_, backTexturePointer_;
+    public CaptureMode frameCaptureMode
+    {
+        get { return texture ? Lib.GetWindowFrameBackend(id, texturePointer_) : CaptureMode.None; }
+    }
+    public bool isFrameReady
+    {
+        get { return isAlive && texture && texture.width == width && texture.height == height && frameCaptureMode != CaptureMode.None; }
+    }
     private bool willTextureSizeChange_ = false;
     public Texture2D texture
     {
@@ -345,6 +354,8 @@ public class UwcWindow
         var w = width;
         var h = height;
         if (w <= 0 || h <= 0) return;
+        // Repeated capture requests must not replace the target while its first render is pending.
+        if (backTexture_ && backTexture_.width == w && backTexture_.height == h) return;
 
         if (force || !texture || texture.width != w || texture.height != h) {
             Texture2D replacement = null;
@@ -357,6 +368,7 @@ public class UwcWindow
                 Lib.SetWindowTexturePtr(id, pointer);
                 var previous = backTexture_;
                 backTexture_ = replacement;
+                backTexturePointer_ = pointer;
                 replacement = null;
                 willTextureSizeChange_ = true;
                 if (previous) Object.DestroyImmediate(previous);
@@ -371,11 +383,14 @@ public class UwcWindow
     void UpdateWindowTexture()
     {
         if (willTextureSizeChange_) {
+            if (!backTexture_ || Lib.GetWindowFrameBackend(id, backTexturePointer_) == CaptureMode.None) return;
             if (texture) {
                 Object.DestroyImmediate(texture);
             }
             texture = backTexture_;
+            texturePointer_ = backTexturePointer_;
             backTexture_ = null;
+            backTexturePointer_ = System.IntPtr.Zero;
             willTextureSizeChange_ = false;
         }
     }
