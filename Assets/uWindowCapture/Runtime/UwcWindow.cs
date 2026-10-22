@@ -354,6 +354,8 @@ public class UwcWindow
         var w = width;
         var h = height;
         if (w <= 0 || h <= 0) return;
+        // Repeated capture requests must not replace the target while its first render is pending.
+        if (backTexture_ && backTexture_.width == w && backTexture_.height == h) return;
 
         if (force || !texture || texture.width != w || texture.height != h) {
             Texture2D replacement = null;

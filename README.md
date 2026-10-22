@@ -41,5 +41,10 @@ matches them. This prevents delayed old capture messages from publishing an
 uninitialized replacement. Frame backend metadata follows the capture/upload
 path, not just the requested `Auto` setting. Native GPU tests verify readiness
 before/after 32 target replacements and backend identity after each render.
+Repeated requests reuse a correctly sized pending managed target until it has
+rendered; they must not continually allocate replacements and starve publication.
+WindowsAR UPM updates preserve the existing package assembly definitions
+(including runtime `autoReferenced=true`) and `Samples~` layout; a raw subtree
+of the source asset folder has different assembly-reference defaults.
 
 The source changes live on `feature/windowsar-cursor-session-bounds`; the corresponding Unity package is published on `windowsar-upm`. Consumers should pin the package's commit rather than a moving branch.
