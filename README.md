@@ -48,3 +48,26 @@ WindowsAR UPM updates preserve the existing package assembly definitions
 of the source asset folder has different assembly-reference defaults.
 
 The source changes live on `feature/windowsar-cursor-session-bounds`; the corresponding Unity package is published on `windowsar-upm`. Consumers should pin the package's commit rather than a moving branch.
+
+`1.1.0-windowsar.4` adds opt-in, owned capture mip targets. Call
+`UwcWindow.SetMipmapsEnabled(true)` to use a BGRA RenderTexture with a full
+trilinear/8x-anisotropic mip chain and an external Texture2D wrapper; false
+restores the original mipless Texture2D path. Dispose the wrapper before its
+backing resource. `ReleaseCaptureTexture()` withdraws the native target and
+releases both pending and published owners.
+
+`UwcSetWindowTexturePtrWithMipOptions(id, pointer, width, height, srgb)` retains
+the old valid frame during same-size target replacement. Dimension changes
+withdraw readiness. The upload resource stays single-mip. Rendering copies
+only subresource zero into a mip target and generates through a cached
+format-compatible SRV before publication. Legacy targets use CopyResource.
+Generation is skipped only for an already published upload version; this is
+not pixel-damage detection. A bitmap/backend rebuild that withdraws a pending
+target is recovered by rebinding that same owner, not repeated allocation.
+
+Native checks cover unchanged base pixels, alpha, linear/sRGB mip averaging,
+regeneration, target switching and SRV release. Unity allocation and real
+capture/readback must also be tested by the consuming application. The
+WindowsAR application packages this unpushed source and both architectures
+with `Tools\Build-CaptureMipPackage.ps1`; its local UPM tarball is portable
+and includes the MIT license. No PackageCache edits are needed.

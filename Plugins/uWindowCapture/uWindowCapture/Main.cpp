@@ -400,6 +400,12 @@ extern "C"
         }
     }
 
+    UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API UwcSetWindowTexturePtrWithMipOptions(
+        int id, ID3D11Texture2D* ptr, UINT width, UINT height, int srgb)
+    {
+        if (auto window = GetWindow(id)) window->SetWindowTexture(ptr, width, height, srgb != 0);
+    }
+
     UNITY_INTERFACE_EXPORT ID3D11Texture2D* UNITY_INTERFACE_API UwcGetWindowIconTexturePtr(int id)
     {
         if (auto window = GetWindow(id))

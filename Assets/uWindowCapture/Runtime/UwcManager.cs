@@ -146,8 +146,14 @@ public class UwcManager : MonoBehaviour
 
     void OnApplicationQuit()
     {
+        foreach (var window in windows_.Values) window.ReleaseCaptureTexture();
         Resources.UnloadUnusedAssets();
         Lib.Finalize();
+    }
+
+    void OnDestroy()
+    {
+        foreach (var window in windows_.Values) window.ReleaseCaptureTexture();
     }
 
     void OnEnable()
@@ -222,6 +228,7 @@ public class UwcManager : MonoBehaviour
                         } else {
                             onWindowRemoved.Invoke(window);
                         }
+                        window.ReleaseCaptureTexture();
                     }
                     break;
                 }

@@ -76,7 +76,7 @@ public:
     const std::wstring& GetTitle() const;
     const std::string& GetClass() const;
 
-    void SetWindowTexture(ID3D11Texture2D* ptr);
+    void SetWindowTexture(ID3D11Texture2D* ptr, UINT width = 0, UINT height = 0, bool mipSrgb = false);
     ID3D11Texture2D* GetWindowTexture() const;
 
     void SetIconTexture(ID3D11Texture2D* ptr);

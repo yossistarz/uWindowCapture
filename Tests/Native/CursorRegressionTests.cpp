@@ -8,6 +8,8 @@
 #include <chrono>
 #include <atomic>
 #include <cstdint>
+#include <array>
+#include <algorithm>
 #include "Util.h"
 #include "Cursor.h"
 #include "IconTexture.h"
@@ -268,6 +270,97 @@ struct CursorRegressionTests
         printf("TEXTURE_GPU_READBACK replacements=32 checked\n");
     }
 
+    static void MipReadbackAndSwitch(HWND handle)
+    {
+        using Microsoft::WRL::ComPtr;
+        IUnityInterfaces interfaces{};
+        interfaces.GetInterface = TestInterface;
+        auto previousUnity = g_unity;
+        g_unity = &interfaces;
+        MessageManager::Create();
+        ScopedReleaser cleanup([&]
+        {
+            WindowManager::Get().uploadManager_.reset();
+            MessageManager::Destroy();
+            g_unity = previousUnity;
+        });
+        auto uploader = std::make_unique<UploadManager>();
+        uploader->initThread_.join(); uploader->StopUploadThread();
+        WindowManager::Get().uploadManager_ = std::move(uploader);
+        ComPtr<ID3D11DeviceContext> context;
+        textureDevice->GetImmediateContext(&context);
+        Window::Data1 data{}; data.hWnd = handle;
+        Window window(5, data);
+        WindowTexture capture(&window);
+        capture.SetCaptureMode(CaptureMode::BitBlt);
+        capture.textureWidth_ = capture.textureHeight_ = capture.bufferWidth_ = capture.bufferHeight_ = 8;
+        capture.buffer_.ExpandIfNeeded(8 * 8 * 4);
+        for (int pixel = 0; pixel < 64; ++pixel)
+        {
+            auto* value = capture.buffer_.Get(pixel * 4);
+            value[0] = value[1] = value[2] = pixel % 2 ? 255 : 0;
+            value[3] = 255;
+        }
+        auto mipTarget = [&](bool srgb)
+        {
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width = desc.Height = 8; desc.MipLevels = 0; desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS; desc.SampleDesc.Count = 1;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+            ComPtr<ID3D11Texture2D> target;
+            winrt::check_hresult(textureDevice->CreateTexture2D(&desc, nullptr, &target));
+            capture.SetUnityTexturePtr(target.Get(), 8, 8, srgb);
+            return target;
+        };
+        auto sampleMip = [&](ID3D11Texture2D* target, UINT mip)
+        {
+            D3D11_TEXTURE2D_DESC desc{};
+            target->GetDesc(&desc);
+            desc.Width = (std::max)(1u, desc.Width >> mip); desc.Height = (std::max)(1u, desc.Height >> mip);
+            desc.MipLevels = desc.ArraySize = 1; desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = desc.MiscFlags = 0;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            ComPtr<ID3D11Texture2D> staging;
+            winrt::check_hresult(textureDevice->CreateTexture2D(&desc, nullptr, &staging));
+            context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, target, mip, nullptr);
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            winrt::check_hresult(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped));
+            std::array<BYTE, 4> result{};
+            memcpy(result.data(), mapped.pData, 4);
+            context->Unmap(staging.Get(), 0);
+            return result;
+        };
+        auto first = mipTarget(false);
+        Check(capture.Upload() && capture.Render(), "mip capture uploads and publishes through the real shared-device copy");
+        auto level = sampleMip(first.Get(), 1);
+        Check(level[0] >= 127 && level[0] <= 129 && level[3] == 255, "native generated mip contains averaged pixels and preserved alpha");
+        auto base = sampleMip(first.Get(), 0);
+        Check(base[0] == 0 && base[3] == 255, "level-zero capture pixels remain unchanged");
+        const auto generations = capture.mipmapGenerationCount_;
+        const auto messages = MessageManager::Get().GetCount();
+        Check(!capture.Render(), "unchanged source does not regenerate mipmaps every render frame");
+        Check(capture.mipmapGenerationCount_ == generations && MessageManager::Get().GetCount() == messages,
+            "skipped mip work does not falsely publish another capture");
+        Check(capture.Upload() && capture.Render() && capture.mipmapGenerationCount_ == generations + 1,
+            "a new uploaded version regenerates and publishes its mips");
+        auto legacy = CreateTexture(8, 8);
+        capture.SetUnityTexturePtr(legacy.Get(), 8, 8);
+        Check(capture.GetRenderedCaptureMode(first.Get()) == CaptureMode::BitBlt &&
+            capture.GetRenderedCaptureMode(legacy.Get()) == CaptureMode::None,
+            "same-size sampling switch retains the last valid target until replacement publication");
+        Check(capture.Render() && capture.GetRenderedCaptureMode(legacy.Get()) == CaptureMode::BitBlt,
+            "legacy target remains supported by the new native renderer");
+        auto srgb = mipTarget(true);
+        Check(capture.Render(), "sRGB mip target publishes a valid frame");
+        level = sampleMip(srgb.Get(), 1);
+        Check(level[0] >= 186 && level[0] <= 190, "declared sRGB view generates gamma-correct mip pixels");
+        capture.SetUnityTexturePtr(nullptr);
+        Check(!capture.mipView_ && capture.GetRenderedCaptureMode(nullptr) == CaptureMode::None,
+            "clearing capture releases the cached mip view and publication");
+        printf("MIP_GPU_READBACK mode-switch, UNorm/sRGB, version reuse checked\n");
+    }
+
     static void LifetimeStressAndCost()
     {
         std::atomic<int> destroyed{0}, reads{0}, invalid{0};
@@ -449,6 +542,7 @@ struct CursorRegressionTests
             LifetimeDuringUpload(window);
             LifetimeStressAndCost();
             RenderReadback(window);
+            MipReadbackAndSwitch(window);
         }
         catch (...)
         {

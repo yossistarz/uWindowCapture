@@ -236,11 +236,12 @@ public class UwcWindow
         get { return Lib.GetWindowIconHeight(id); }
     }
 
-    private Texture2D backTexture_;
-    private System.IntPtr texturePointer_, backTexturePointer_;
+    private CaptureTextureTarget frontTarget_, backTarget_;
+    private bool mipmapsEnabled_;
+    public bool mipmapsEnabled { get { return mipmapsEnabled_; } }
     public CaptureMode frameCaptureMode
     {
-        get { return texture ? Lib.GetWindowFrameBackend(id, texturePointer_) : CaptureMode.None; }
+        get { return texture ? Lib.GetWindowFrameBackend(id, frontTarget_.Pointer) : CaptureMode.None; }
     }
     public bool isFrameReady
     {
@@ -249,8 +250,7 @@ public class UwcWindow
     private bool willTextureSizeChange_ = false;
     public Texture2D texture
     {
-        get;
-        private set;
+        get { return frontTarget_ != null ? frontTarget_.Texture : null; }
     }
 
     private Texture2D iconTexture_;
@@ -355,27 +355,27 @@ public class UwcWindow
         var h = height;
         if (w <= 0 || h <= 0) return;
         // Repeated capture requests must not replace the target while its first render is pending.
-        if (backTexture_ && backTexture_.width == w && backTexture_.height == h) return;
+        if (backTarget_ != null && backTarget_.Matches(w, h, mipmapsEnabled_)) {
+            // A backend bitmap rebuild can withdraw an otherwise correctly sized pending target.
+            if (Lib.GetWindowTexturePtr(id) != backTarget_.Pointer) backTarget_.Bind(id);
+            return;
+        }
 
-        if (force || !texture || texture.width != w || texture.height != h) {
-            Texture2D replacement = null;
+        if (force || frontTarget_ == null || !frontTarget_.Matches(w, h, mipmapsEnabled_)) {
+            CaptureTextureTarget replacement = null;
             try {
-                replacement = new Texture2D(w, h, TextureFormat.BGRA32, false);
-                var pointer = replacement.GetNativeTexturePtr();
-                if (pointer == System.IntPtr.Zero) {
-                    throw new System.InvalidOperationException("The replacement window texture has no native resource.");
-                }
-                Lib.SetWindowTexturePtr(id, pointer);
-                var previous = backTexture_;
-                backTexture_ = replacement;
-                backTexturePointer_ = pointer;
+                replacement = new CaptureTextureTarget(w, h, mipmapsEnabled_);
+                replacement.Bind(id);
+                var previous = backTarget_;
+                backTarget_ = replacement;
                 replacement = null;
                 willTextureSizeChange_ = true;
-                if (previous) Object.DestroyImmediate(previous);
+                previous?.Dispose();
             } catch (System.Exception e) {
-                if (replacement) Object.DestroyImmediate(replacement);
+                replacement?.Dispose();
                 Debug.LogError(e.Message);
                 Debug.LogErrorFormat("Width: {0}, Height: {1}", w, h);
+                throw;
             }
         }
     }
@@ -383,14 +383,10 @@ public class UwcWindow
     void UpdateWindowTexture()
     {
         if (willTextureSizeChange_) {
-            if (!backTexture_ || Lib.GetWindowFrameBackend(id, backTexturePointer_) == CaptureMode.None) return;
-            if (texture) {
-                Object.DestroyImmediate(texture);
-            }
-            texture = backTexture_;
-            texturePointer_ = backTexturePointer_;
-            backTexture_ = null;
-            backTexturePointer_ = System.IntPtr.Zero;
+            if (backTarget_ == null || Lib.GetWindowFrameBackend(id, backTarget_.Pointer) == CaptureMode.None) return;
+            frontTarget_?.Dispose();
+            frontTarget_ = backTarget_;
+            backTarget_ = null;
             willTextureSizeChange_ = false;
         }
     }
@@ -398,6 +394,24 @@ public class UwcWindow
     public void ResetWindowTexture()
     {
         CreateWindowTexture(true);
+    }
+
+    public void SetMipmapsEnabled(bool enabled)
+    {
+        if (mipmapsEnabled_ == enabled) return;
+        bool previous = mipmapsEnabled_;
+        mipmapsEnabled_ = enabled;
+        try { CreateWindowTexture(true); }
+        catch { mipmapsEnabled_ = previous; throw; }
+    }
+
+    public void ReleaseCaptureTexture()
+    {
+        if (frontTarget_ == null && backTarget_ == null) return;
+        Lib.SetWindowTexturePtr(id, System.IntPtr.Zero);
+        frontTarget_?.Dispose(); backTarget_?.Dispose();
+        frontTarget_ = backTarget_ = null;
+        willTextureSizeChange_ = false;
     }
 
     void CreateIconTexture()

@@ -156,6 +156,8 @@ public static class Lib
     public static extern IntPtr GetWindowTexturePtr(int id);
     [DllImport(name, EntryPoint = "UwcSetWindowTexturePtr")]
     public static extern void SetWindowTexturePtr(int id, IntPtr texturePtr);
+    [DllImport(name, EntryPoint = "UwcSetWindowTexturePtrWithMipOptions")]
+    public static extern void SetWindowTexturePtrWithMipOptions(int id, IntPtr texturePtr, uint width, uint height, int srgb);
     [DllImport(name, EntryPoint = "UwcGetWindowIconTexturePtr")]
     public static extern IntPtr GetWindowIconTexturePtr(int id);
     [DllImport(name, EntryPoint = "UwcSetWindowIconTexturePtr")]

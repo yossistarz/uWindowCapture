@@ -114,6 +114,14 @@ TexturePtr UploadManager::CreateCompatibleSharedTexture(const TexturePtr& textur
 
     D3D11_TEXTURE2D_DESC desc = srcDesc;
     desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+    desc.MipLevels = desc.ArraySize = 1;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.CPUAccessFlags = 0;
+    if (desc.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS || desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
+        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    if (desc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS || desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     if (FAILED(device_->CreateTexture2D(&desc, nullptr, &sharedTexture)))
     {

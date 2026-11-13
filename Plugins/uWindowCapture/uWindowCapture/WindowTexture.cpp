@@ -45,15 +45,22 @@ WindowTexture::~WindowTexture()
 }
 
 
-void WindowTexture::SetUnityTexturePtr(ID3D11Texture2D* ptr)
+void WindowTexture::SetUnityTexturePtr(ID3D11Texture2D* ptr, UINT width, UINT height, bool mipSrgb)
 {
     ComPtr<ID3D11Texture2D> retired;
     {
         std::lock_guard<std::mutex> lock(renderedTextureMutex_);
-        retired = std::move(renderedTexture_);
-        renderedCaptureMode_ = CaptureMode::None;
+        if (!ptr || width == 0 || height == 0 || width != renderedWidth_ || height != renderedHeight_)
+        {
+            retired = std::move(renderedTexture_);
+            renderedCaptureMode_ = CaptureMode::None;
+            renderedWidth_ = renderedHeight_ = 0;
+            renderedVersion_ = 0;
+        }
+        unityTexture_.Set(ptr);
+        mipSrgb_ = mipSrgb;
+        mipView_.Reset();
     }
-    unityTexture_.Set(ptr);
 }
 
 
@@ -586,6 +593,7 @@ bool WindowTexture::UploadByWin32API()
         context->UpdateSubresource(sharedTexture_.Get(), 0, nullptr, start, rawPitch, 0);
         context->Flush();
         sharedCaptureMode_ = capturedMode_ == CaptureMode::Auto ? GetCaptureModeInternal() : capturedMode_.load();
+        ++sharedVersion_;
     }
 
     return true;
@@ -614,6 +622,7 @@ bool WindowTexture::UploadByWindowsGraphicsCapture()
         context->CopyResource(sharedTexture_.Get(), result.pTexture);
         context->Flush();
         sharedCaptureMode_ = CaptureMode::WindowsGraphicsCapture;
+        ++sharedVersion_;
     }
     catch (...)
     {
@@ -657,21 +666,53 @@ bool WindowTexture::Render()
         return false;
     }
 
-    try
-    {
-        context->CopyResource(unityTexture.Get(), texture.Get());
-    }
-    catch (...)
-    {
-        Debug::Error(__FUNCTION__, " => CopyResource() threw an exception.");
-        return false;
-    }
-
     {
         std::lock_guard<std::mutex> ready(renderedTextureMutex_);
+        if (unityTexture_.Get() != unityTexture.Get()) return false;
+        const bool mipmapped = targetDesc.MipLevels > 1;
+        if (mipmapped && renderedTexture_ == unityTexture && renderedVersion_ == sharedVersion_) return false;
+        if (mipmapped)
+        {
+            const UINT required = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+            if ((targetDesc.BindFlags & required) != required ||
+                (targetDesc.MiscFlags & D3D11_RESOURCE_MISC_GENERATE_MIPS) == 0 ||
+                targetDesc.SampleDesc.Count != 1 || targetDesc.ArraySize != 1)
+            {
+                Debug::Error(__FUNCTION__, " => Mip target does not support GPU generation.");
+                return false;
+            }
+            if (!mipView_)
+            {
+                D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+                view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                view.Texture2D.MipLevels = targetDesc.MipLevels;
+                if (targetDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM || targetDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
+                    targetDesc.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS)
+                    view.Format = mipSrgb_ ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
+                else if (targetDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || targetDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
+                    targetDesc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS)
+                    view.Format = mipSrgb_ ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
+                else
+                {
+                    Debug::Error(__FUNCTION__, " => Unsupported mip capture format.");
+                    return false;
+                }
+                if (FAILED(GetUnityDevice()->CreateShaderResourceView(unityTexture.Get(), &view, &mipView_)))
+                {
+                    Debug::Error(__FUNCTION__, " => Mip shader-resource view could not be created.");
+                    return false;
+                }
+            }
+            context->CopySubresourceRegion(unityTexture.Get(), 0, 0, 0, 0, texture.Get(), 0, nullptr);
+            context->GenerateMips(mipView_.Get());
+            ++mipmapGenerationCount_;
+        }
+        else context->CopyResource(unityTexture.Get(), texture.Get());
         retired = std::move(renderedTexture_);
         renderedTexture_ = unityTexture;
         renderedCaptureMode_ = sharedCaptureMode_;
+        renderedWidth_ = targetDesc.Width; renderedHeight_ = targetDesc.Height;
+        renderedVersion_ = sharedVersion_;
     }
     MessageManager::Get().Add({ MessageType::WindowCaptured, window_->GetId(), window_->GetWindowHandle() });
 

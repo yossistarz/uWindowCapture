@@ -5,6 +5,7 @@
 #include <wrl/client.h>
 #include <mutex>
 #include <atomic>
+#include <cstdint>
 
 #include "Buffer.h"
 #include "UnityTextureReference.h"
@@ -33,7 +34,7 @@ public:
     explicit WindowTexture(Window* window);
     ~WindowTexture();
 
-    void SetUnityTexturePtr(ID3D11Texture2D* ptr);
+    void SetUnityTexturePtr(ID3D11Texture2D* ptr, UINT width = 0, UINT height = 0, bool mipSrgb = false);
     ID3D11Texture2D* GetUnityTexturePtr() const;
 
     void SetCaptureMode(CaptureMode mode);
@@ -86,6 +87,10 @@ private:
     mutable std::mutex renderedTextureMutex_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> renderedTexture_;
     CaptureMode renderedCaptureMode_ = CaptureMode::None;
+    UINT renderedWidth_ = 0, renderedHeight_ = 0;
+    uint64_t sharedVersion_ = 0, renderedVersion_ = 0, mipmapGenerationCount_ = 0;
+    bool mipSrgb_ = false;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mipView_;
 
     Buffer<BYTE> buffer_;
     Buffer<BYTE> bufferForGetBuffer_;

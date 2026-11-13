@@ -279,9 +279,9 @@ const std::string& Window::GetClass() const
 }
 
 
-void Window::SetWindowTexture(ID3D11Texture2D* ptr)
+void Window::SetWindowTexture(ID3D11Texture2D* ptr, UINT width, UINT height, bool mipSrgb)
 {
-    windowTexture_->SetUnityTexturePtr(ptr);
+    windowTexture_->SetUnityTexturePtr(ptr, width, height, mipSrgb);
 }
 
 
