@@ -193,7 +193,23 @@ public class UwcManager : MonoBehaviour
     {
         var window = new UwcWindow(id);
         windows.Add(id, window);
+        if (window.isDesktop && Lib.GetWindowWgcStatus(id, out var status) && status.lastError < 0 && status.available == 0)
+            ReportCaptureStatus(window, status);
         return window;
+    }
+
+    static void ReportCaptureStatus(UwcWindow window, WgcCaptureStatus status)
+    {
+        string target = "id=" + window.id + (window.isDesktop ? " desktop " : " window ");
+        if (status.available == 0 && status.lastError < 0)
+            Debug.LogWarning("WGC unavailable: " + target + status +
+                (status.lastError == unchecked((int)0x80070005)
+                    ? " Windows denied capture access; check screen-capture permissions or policy." : "") +
+                (status.supported != 0
+                    ? " Auto capture retains the compatibility backend while recovery is pending."
+                    : " WGC is unsupported; Auto capture retains the compatibility backend."));
+        else if (status.recoveries > 0)
+            Debug.Log("WGC recovered: " + target + status);
     }
 
     void UpdateMessages()
@@ -255,6 +271,12 @@ public class UwcManager : MonoBehaviour
                 }
                 case MessageType.CursorCaptured: {
                     cursor.onCaptured.Invoke();
+                    break;
+                }
+                case MessageType.WindowCaptureStatusChanged: {
+                    var window = Find(id);
+                    if (window != null && Lib.GetWindowWgcStatus(id, out var status))
+                        ReportCaptureStatus(window, status);
                     break;
                 }
                 case MessageType.TextureNullError: {

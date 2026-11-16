@@ -29,5 +29,6 @@ int WindowQueue::Dequeue()
 
 bool WindowQueue::Empty() const
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     return queue_.empty();
 }

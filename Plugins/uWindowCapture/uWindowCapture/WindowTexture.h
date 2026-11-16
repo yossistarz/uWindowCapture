@@ -23,12 +23,21 @@ enum class CaptureMode
 
 class Window;
 class WindowsGraphicsCapture;
+struct WgcCaptureStatus;
+
+struct WindowCaptureStatistics
+{
+    uint64_t requests = 0, captureAttempts = 0, busyCaptures = 0, sourceFrames = 0, uploads = 0, publications = 0;
+    int64_t publishedSourceTime = 0;
+    int32_t backend = -1, reserved = 0;
+};
 
 
 class WindowTexture
 {
 #ifdef UWC_NATIVE_TESTS
 friend struct CursorRegressionTests;
+friend struct CaptureThroughputTests;
 #endif
 public:
     explicit WindowTexture(Window* window);
@@ -51,7 +60,11 @@ public:
 
     bool Capture();
     bool Upload();
+    void KeepCaptureAlive();
+    bool IsWaitingForCaptureFrame() const;
     bool Render();
+    WindowCaptureStatistics GetStatistics();
+    WgcCaptureStatus GetWgcStatus() const;
 
     BYTE* GetBuffer();
 
@@ -89,6 +102,10 @@ private:
     CaptureMode renderedCaptureMode_ = CaptureMode::None;
     UINT renderedWidth_ = 0, renderedHeight_ = 0;
     uint64_t sharedVersion_ = 0, renderedVersion_ = 0, mipmapGenerationCount_ = 0;
+    std::atomic<uint64_t> uploadedCount_ = 0, publicationCount_ = 0;
+    int64_t sharedSourceTime_ = 0;
+    std::atomic<int64_t> publishedSourceTime_ = 0;
+    std::atomic<int32_t> publishedBackend_ = -1;
     bool mipSrgb_ = false;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> mipView_;
 

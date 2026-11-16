@@ -10,6 +10,9 @@
 #include <cstdint>
 #include <array>
 #include <algorithm>
+#include <cstring>
+#include <vector>
+#include "Thread.h"
 #include "Util.h"
 #include "Cursor.h"
 #include "IconTexture.h"
@@ -113,6 +116,32 @@ struct CursorRegressionTests
         manager->deviceWinRt_ = inspectable.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
         WindowManager::Create();
         WindowManager::Get().windowsGraphicsCaptureManager_ = std::move(manager);
+    }
+
+    static void RequestDrivenThread()
+    {
+        std::atomic<int> callbacks{0};
+        std::promise<void> ran;
+        auto completed = ran.get_future();
+        ThreadLoop loop(L"Request-driven regression");
+        loop.Wake();
+        loop.Start([&]
+        {
+            if (++callbacks == 1) ran.set_value();
+        }, ThreadLoop::microseconds::zero(), ThreadLoop::WaitMode::OnRequest);
+        Check(completed.wait_for(std::chrono::seconds(1)) == std::future_status::ready,
+            "a request made before worker startup is not lost");
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        Check(callbacks == 1, "idle request-driven worker does not poll");
+        const auto beforeStop = std::chrono::steady_clock::now();
+        loop.Stop();
+        Check(std::chrono::steady_clock::now() - beforeStop < std::chrono::milliseconds(100),
+            "stopping an indefinitely waiting worker wakes it promptly");
+        loop.Restart();
+        loop.Wake();
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        loop.Stop();
+        Check(callbacks == 2, "restart preserves request-driven mode");
     }
 
     template<class Owner, class Operation>
@@ -262,6 +291,7 @@ struct CursorRegressionTests
                 for (UINT x = 0; x < width * 4; ++x)
                     if (static_cast<BYTE*>(mapped.pData)[y * mapped.RowPitch + x] != i + 1) correct = false;
             context->Unmap(staging.Get(), 0);
+            if (!correct) fprintf(stderr, "PIXEL_READBACK replacement=%d width=%u expected=%d\n", i, width, i + 1);
             Check(correct, "GPU readback contains the uploaded pixels after resize/replacement");
         }
         capture.SetUnityTexturePtr(nullptr);
@@ -455,12 +485,147 @@ struct CursorRegressionTests
             Check(capture->IsStarted(), "idle session starts again");
             Check(!capture->session_.IsCursorCaptureEnabled(), "idle restart retains cursor exclusion");
             capture->Restart();
+            Check(!capture->IsStarted(), "capture recovery releases the old session before its bounded retry");
+            capture->retryAt_ = 0;
+            capture->Start();
             Check(capture->IsStarted(), "capture recovery restarts the session");
             Check(!capture->session_.IsCursorCaptureEnabled(), "capture recovery retains cursor exclusion");
         }
         capture->EnableCursorCapture(true);
         capture->Restart();
+        capture->retryAt_ = 0;
+        capture->Start();
         Check(capture->session_.IsCursorCaptureEnabled(), "restart also preserves an enabled cursor");
+        capture->Stop();
+    }
+
+    static void FailedMonitorCaptureRemainsRecoverable()
+    {
+        const auto& manager = WindowManager::GetWindowsGraphicsCaptureManager();
+        const auto capture = manager->Create(reinterpret_cast<HMONITOR>(static_cast<uintptr_t>(1)));
+        Check(capture != nullptr, "a failed monitor capture is retained for bounded recovery instead of permanent BitBlt");
+        if (capture)
+        {
+            const auto status = capture->GetStatus();
+            Check(FAILED(status.lastError), "the actual failing CreateForMonitor HRESULT is preserved");
+            Check(status.failureStage == static_cast<int>(WgcFailureStage::CreateItem), "monitor creation failure has an explicit stage");
+            Check(status.itemAttempts == 1 && status.available == 0, "failed creation is observable without publishing WGC readiness");
+        }
+        if (capture) manager->Destroy(capture);
+    }
+
+    static void MonitorRetryAndRecovery(HWND handle)
+    {
+        WindowsGraphicsCapture::createItemFailureForTests_ = [] { return E_ACCESSDENIED; };
+        ScopedReleaser clearFault([]
+        {
+            WindowsGraphicsCapture::createItemFailureForTests_ = {};
+            WindowsGraphicsCapture::startSessionFailureForTests_ = {};
+        });
+        Window::Data1 data{};
+        data.hWnd = GetDesktopWindow(); data.isDesktop = TRUE;
+        data.hMonitor = MonitorFromWindow(handle, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO monitor{sizeof(monitor)};
+        if (!GetMonitorInfoW(data.hMonitor, &monitor)) winrt::throw_last_error();
+        data.windowRect = data.clientRect = monitor.rcMonitor;
+        Window window(92, data);
+        WindowTexture texture(&window);
+        texture.SetCaptureMode(CaptureMode::Auto);
+        const auto capture = texture.GetWindowsGraphicsCapture();
+        if (!capture) throw std::runtime_error("The monitor recovery object was discarded.");
+        const auto& manager = WindowManager::GetWindowsGraphicsCaptureManager();
+        Check(texture.GetCaptureModeInternal() == CaptureMode::BitBlt, "Auto retains a usable compatibility backend while WGC creation is denied");
+        Check(capture->GetStatus().lastError == E_ACCESSDENIED, "access denial remains distinguishable from unsupported or invalid targets");
+        for (int i = 0; i < 100; ++i)
+        {
+            texture.KeepCaptureAlive();
+            manager->UpdateFromCaptureThread();
+        }
+        Check(capture->GetStatus().itemAttempts == 1, "per-frame capture requests do not bypass initial retry backoff");
+        const uint64_t delays[] = {2000, 4000, 8000, 16000, 30000, 30000};
+        for (const auto delay : delays)
+        {
+            capture->retryAt_ = 0;
+            texture.KeepCaptureAlive();
+            manager->UpdateFromCaptureThread();
+            auto status = capture->GetStatus();
+            Check(status.retryAfterMilliseconds <= delay && status.retryAfterMilliseconds + 100 >= delay,
+                "repeated failures exponentially back off and cap at thirty seconds");
+        }
+        const auto attempts = capture->GetStatus().itemAttempts;
+        capture->retryAt_ = 0;
+        capture->lastRequestAt_ = GetTickCount64() - 2000;
+        manager->UpdateFromCaptureThread();
+        Check(capture->GetStatus().itemAttempts == attempts, "unrequested/offscreen sources do not retry indefinitely");
+        WindowsGraphicsCapture::createItemFailureForTests_ = {};
+        WindowsGraphicsCapture::startSessionFailureForTests_ = [] { return HRESULT_FROM_WIN32(ERROR_NOT_READY); };
+        texture.KeepCaptureAlive();
+        manager->UpdateFromCaptureThread();
+        Check(capture->GetStatus().failureStage == static_cast<int>(WgcFailureStage::StartSession),
+            "session-start failure has a separate diagnostic stage");
+        Check(!capture->IsAvailable() && !capture->pool_ && !capture->session_,
+            "failed session starts release partial resources and retain fallback");
+        WindowsGraphicsCapture::startSessionFailureForTests_ = {};
+        capture->retryAt_ = 0;
+        texture.KeepCaptureAlive();
+        manager->UpdateFromCaptureThread();
+        const auto deadline = GetTickCount64() + 5000;
+        while (!capture->IsAvailable() && GetTickCount64() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        Check(capture->IsStarted() && capture->IsAvailable(), "a permitted monitor recovers to a live WGC session without recreating the AR desktop");
+        Check(texture.GetCaptureModeInternal() == CaptureMode::WindowsGraphicsCapture, "Auto returns from BitBlt to GPU capture after a real source frame");
+        Check(capture->GetStatus().recoveries == 1 && capture->GetStatus().consecutiveFailures == 0,
+            "a real frame resets failure backoff and records recovery");
+        const auto sessions = capture->GetStatus().sessionAttempts;
+        for (int i = 0; i < 100; ++i) { texture.KeepCaptureAlive(); manager->UpdateFromCaptureThread(); }
+        Check(capture->GetStatus().sessionAttempts == sessions, "repeated requests do not start duplicate sessions");
+        Check(std::count(manager->activeInstances_.begin(), manager->activeInstances_.end(), capture) == 1,
+            "a recovering capture has exactly one active-manager entry");
+        texture.SetCaptureMode(CaptureMode::BitBlt);
+        capture->lastRequestAt_ = GetTickCount64() - 2000;
+        manager->UpdateFromCaptureThread();
+        texture.KeepCaptureAlive();
+        manager->UpdateFromCaptureThread();
+        Check(!capture->IsStarted() && texture.GetCaptureModeInternal() == CaptureMode::BitBlt,
+            "explicit BitBlt is respected and stops the unneeded GPU session");
+        Check(capture->GetStatus().sessionAttempts == sessions, "explicit compatibility mode does not silently restart WGC");
+        printf("MONITOR_RECOVERY hresult, backoff, idle suppression, session failure and actual monitor recovery checked\n");
+    }
+
+    static void ClosedItemRecovery()
+    {
+        HWND handle = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, L"STATIC",
+            L"Owned WGC closed-item regression", WS_OVERLAPPEDWINDOW, 80, 80, 200, 160,
+            nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!handle) winrt::throw_last_error();
+        ScopedReleaser close([&] { if (IsWindow(handle)) DestroyWindow(handle); });
+        ShowWindow(handle, SW_SHOWNOACTIVATE);
+        UpdateWindow(handle);
+        const auto capture = std::make_shared<WindowsGraphicsCapture>(handle);
+        capture->Start();
+        const auto readyDeadline = GetTickCount64() + 5000;
+        while (!capture->hasReceivedFrame_ && GetTickCount64() < readyDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        Check(capture->hasReceivedFrame_, "closed-item regression begins with a live captured frame");
+        DestroyWindow(handle);
+        const auto closedDeadline = GetTickCount64() + 5000;
+        while (!capture->itemClosed_ && GetTickCount64() < closedDeadline)
+        {
+            MSG message{};
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+            {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        Check(capture->itemClosed_ && !capture->IsAvailable(), "the real capture-item Closed event withdraws WGC availability");
+        Check(capture->ShouldRestart(), "a closed item requests bounded recovery without relying on static-frame silence");
+        capture->Restart();
+        const auto status = capture->GetStatus();
+        Check(!capture->IsStarted() && status.lastError < 0 && status.retryAfterMilliseconds > 0,
+            "closed-session recovery releases resources, preserves failure detail and observes backoff");
+        Check(!capture->pool_ && !capture->session_, "closing the source does not retain a stale capture session");
         capture->Stop();
     }
 
@@ -535,6 +700,10 @@ struct CursorRegressionTests
         try
         {
             SessionSettings(window);
+            FailedMonitorCaptureRemainsRecoverable();
+            MonitorRetryAndRecovery(window);
+            ClosedItemRecovery();
+            RequestDrivenThread();
             Bounds(window, 40, 40, false);
             Bounds(window, -40, 80, false);
             Bounds(window, 80, 80, true);
@@ -559,8 +728,28 @@ struct CursorRegressionTests
     }
 };
 
-int main()
+int main(int argc, char** argv)
 {
+    if (argc > 1 && std::strcmp(argv[1], "--worker-cadence") == 0)
+    {
+        std::vector<double> gaps;
+        auto started = std::chrono::steady_clock::now();
+        auto previous = started;
+        ThreadLoop loop(L"Capture cadence measurement");
+        loop.Start([&]
+        {
+            auto now = std::chrono::steady_clock::now();
+            gaps.push_back(std::chrono::duration<double, std::milli>(now - previous).count());
+            previous = now;
+        }, std::chrono::microseconds(100));
+        std::this_thread::sleep_for(std::chrono::seconds(4));
+        loop.Stop();
+        auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        std::sort(gaps.begin(), gaps.end());
+        printf("WORKER_CADENCE requested_us=100 ticks=%zu seconds=%.3f rate_hz=%.3f p50_ms=%.3f p95_ms=%.3f max_ms=%.3f\n",
+            gaps.size(), seconds, gaps.size() / seconds, gaps[gaps.size() / 2], gaps[gaps.size() * 95 / 100], gaps.back());
+        return 0;
+    }
     try { return CursorRegressionTests::Run(); }
     catch (const winrt::hresult_error& error)
     {

@@ -9,11 +9,17 @@
 
 
 enum class CaptureMode;
+struct WindowCaptureStatistics;
+struct WgcCaptureStatus;
 
 
 class Window
 {
 friend class WindowManager;
+friend class CaptureManager;
+#ifdef UWC_NATIVE_TESTS
+friend struct CaptureThroughputTests;
+#endif
 public:
     struct Data1
     {
@@ -85,6 +91,8 @@ public:
     void SetCaptureMode(CaptureMode mode);
     CaptureMode GetCaptureMode() const;
     CaptureMode GetRenderedCaptureMode(ID3D11Texture2D* target) const;
+    WindowCaptureStatistics GetCaptureStatistics() const;
+    WgcCaptureStatus GetWgcStatus() const;
 
     void SetCursorDraw(bool draw);
     bool GetCursorDraw() const;
@@ -124,6 +132,7 @@ private:
     void UpdateTitle();
     void UpdateIsBackground();
     bool IsJustAdded() const;
+    void CompleteCapture();
 
     const int id_ = -1;
     int parentId_ = -1;
@@ -136,6 +145,8 @@ private:
 
     std::atomic<bool> hasTitleUpdateRequested_ = false;
     std::atomic<bool> hasNewWindowTextureCaptured_ = false;
+    std::atomic<int> pendingCapturePriority_ = -1;
+    std::atomic<uint64_t> captureRequestCount_ = 0, captureAttemptCount_ = 0, busyCaptureCount_ = 0;
     std::atomic<bool> hasNewWindowTextureUploaded_ = false;
     std::atomic<bool> hasNewIconTextureUploaded_ = false;
     std::atomic<bool> isAlive_ = true;

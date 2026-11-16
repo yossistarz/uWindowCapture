@@ -22,7 +22,7 @@ using TexturePtr = Microsoft::WRL::ComPtr<ID3D11Texture2D>;
 
 namespace
 {
-    constexpr auto kLoopMinTime = std::chrono::microseconds(100);
+    constexpr int kBatchLimit = 32;
 }
 
 
@@ -137,20 +137,20 @@ void UploadManager::StartUploadThread()
 {
     threadLoop_.Start([this] 
     { 
-        // Check window upload
-        const int windowId = windowUploadQueue_.Dequeue();
-        if (windowId >= 0)
+        for (int processed = 0; processed < kBatchLimit; ++processed)
         {
+            const int windowId = windowUploadQueue_.Dequeue();
+            if (windowId < 0) break;
             if (auto window = WindowManager::Get().GetWindow(windowId))
             {
                 window->Upload();
             }
         }
 
-        // Check icon upload
-        const int iconId = iconUploadQueue_.Dequeue();
-        if (iconId >= 0)
+        for (int processed = 0; processed < kBatchLimit; ++processed)
         {
+            const int iconId = iconUploadQueue_.Dequeue();
+            if (iconId < 0) break;
             if (auto window = WindowManager::Get().GetWindow(iconId))
             {
                 window->UploadIcon();
@@ -162,7 +162,8 @@ void UploadManager::StartUploadThread()
         {
             cursor->Upload();
         }
-    }, kLoopMinTime);
+        if (!windowUploadQueue_.Empty() || !iconUploadQueue_.Empty()) threadLoop_.Wake();
+    }, ThreadLoop::microseconds::zero(), ThreadLoop::WaitMode::OnRequest);
 }
 
 
@@ -175,10 +176,17 @@ void UploadManager::StopUploadThread()
 void UploadManager::RequestUploadWindow(int id)
 {
     windowUploadQueue_.Enqueue(id);
+    threadLoop_.Wake();
 }
 
 
 void UploadManager::RequestUploadIcon(int id)
 {
     iconUploadQueue_.Enqueue(id);
+    threadLoop_.Wake();
+}
+
+void UploadManager::RequestUploadCursor()
+{
+    threadLoop_.Wake();
 }

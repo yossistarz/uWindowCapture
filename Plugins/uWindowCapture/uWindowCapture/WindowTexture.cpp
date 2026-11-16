@@ -1,4 +1,5 @@
 #include <dwmapi.h>
+#include <winrt/Windows.Foundation.h>
 #include "WindowTexture.h"
 #include "WindowsGraphicsCapture.h"
 #include "Window.h"
@@ -25,6 +26,21 @@ WindowTexture::WindowTexture(Window* window)
         else
         {
             windowsGraphicsCapture_ = wgcManager->Create(window_->GetWindowHandle());
+        }
+        if (const auto wgc = windowsGraphicsCapture_.lock())
+        {
+            const int id = window_->GetId();
+            wgc->SetFrameAvailableCallback([id]
+            {
+                if (!WindowManager::IsNull())
+                    if (const auto& uploader = WindowManager::GetUploadManager())
+                        uploader->RequestUploadWindow(id);
+            });
+            wgc->SetStatusChangedCallback([id]
+            {
+                if (!MessageManager::IsNull())
+                    MessageManager::Get().Add({ MessageType::WindowCaptureStatusChanged, id, nullptr });
+            });
         }
     }
 }
@@ -201,11 +217,26 @@ std::shared_ptr<WindowsGraphicsCapture> WindowTexture::GetWindowsGraphicsCapture
 
 bool WindowTexture::Capture()
 {
+    KeepCaptureAlive();
     const auto mode = GetCaptureModeInternal();
     const bool captured = mode == CaptureMode::WindowsGraphicsCapture ?
         CaptureByWindowsGraphicsCapture() : CaptureByWin32API(mode);
     if (captured) capturedMode_ = mode;
     return captured;
+}
+
+void WindowTexture::KeepCaptureAlive()
+{
+    const auto requested = captureMode_.load();
+    if (requested == CaptureMode::Auto || requested == CaptureMode::WindowsGraphicsCapture)
+        if (const auto wgc = windowsGraphicsCapture_.lock()) wgc->RequestStart();
+}
+
+bool WindowTexture::IsWaitingForCaptureFrame() const
+{
+    if (GetCaptureModeInternal() != CaptureMode::WindowsGraphicsCapture) return false;
+    const auto wgc = windowsGraphicsCapture_.lock();
+    return wgc && wgc->IsWaitingForFrame();
 }
     
 
@@ -456,6 +487,15 @@ bool WindowTexture::CaptureByWindowsGraphicsCapture()
 
     wgc->EnableCursorCapture(GetCursorDraw());
 
+    if (window_->IsDesktop() && bufferWidth_ > 0)
+    {
+        std::lock_guard<std::mutex> lock(bufferMutex_);
+        DeleteBitmap();
+        buffer_.Reset();
+        bufferForGetBuffer_.Reset();
+        bufferWidth_ = bufferHeight_ = 0;
+    }
+
     textureWidth_ = wgc->GetWidth();
     textureHeight_ = wgc->GetHeight();
     if (window_->IsDesktop())
@@ -593,7 +633,9 @@ bool WindowTexture::UploadByWin32API()
         context->UpdateSubresource(sharedTexture_.Get(), 0, nullptr, start, rawPitch, 0);
         context->Flush();
         sharedCaptureMode_ = capturedMode_ == CaptureMode::Auto ? GetCaptureModeInternal() : capturedMode_.load();
+        sharedSourceTime_ = 0;
         ++sharedVersion_;
+        ++uploadedCount_;
     }
 
     return true;
@@ -607,9 +649,9 @@ bool WindowTexture::UploadByWindowsGraphicsCapture()
     auto wgc = windowsGraphicsCapture_.lock();
     if (!wgc) return false;
 
-    const auto result = wgc->TryGetLatestResult();
+    auto result = wgc->TryGetLatestResult();
     if (!result.pTexture) return false;
-    ScopedReleaser resultReleaser([&] { wgc->ReleaseLatestResult(); });
+    ScopedReleaser resultReleaser([&] { result.Close(); });
 
     const auto& uploader = WindowManager::GetUploadManager();
     if (!uploader) return false;
@@ -622,7 +664,9 @@ bool WindowTexture::UploadByWindowsGraphicsCapture()
         context->CopyResource(sharedTexture_.Get(), result.pTexture);
         context->Flush();
         sharedCaptureMode_ = CaptureMode::WindowsGraphicsCapture;
+        sharedSourceTime_ = result.sourceTime;
         ++sharedVersion_;
+        ++uploadedCount_;
     }
     catch (...)
     {
@@ -632,6 +676,7 @@ bool WindowTexture::UploadByWindowsGraphicsCapture()
 
     if (result.hasSizeChanged)
     {
+        result.Close();
         const auto w = result.width;
         const auto h = result.height;
         wgc->ChangePoolSize(w, h);
@@ -670,7 +715,7 @@ bool WindowTexture::Render()
         std::lock_guard<std::mutex> ready(renderedTextureMutex_);
         if (unityTexture_.Get() != unityTexture.Get()) return false;
         const bool mipmapped = targetDesc.MipLevels > 1;
-        if (mipmapped && renderedTexture_ == unityTexture && renderedVersion_ == sharedVersion_) return false;
+        if (renderedTexture_ == unityTexture && renderedVersion_ == sharedVersion_) return false;
         if (mipmapped)
         {
             const UINT required = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -713,6 +758,9 @@ bool WindowTexture::Render()
         renderedCaptureMode_ = sharedCaptureMode_;
         renderedWidth_ = targetDesc.Width; renderedHeight_ = targetDesc.Height;
         renderedVersion_ = sharedVersion_;
+        publishedSourceTime_ = sharedSourceTime_;
+        publishedBackend_ = static_cast<int32_t>(renderedCaptureMode_);
+        ++publicationCount_;
     }
     MessageManager::Get().Add({ MessageType::WindowCaptured, window_->GetId(), window_->GetWindowHandle() });
 
@@ -720,11 +768,27 @@ bool WindowTexture::Render()
 }
 
 
+WindowCaptureStatistics WindowTexture::GetStatistics()
+{
+    WindowCaptureStatistics result{};
+    if (auto capture = windowsGraphicsCapture_.lock()) result.sourceFrames = capture->GetArrivedFrameCount();
+    result.uploads = uploadedCount_;
+    result.publications = publicationCount_;
+    result.publishedSourceTime = publishedSourceTime_;
+    result.backend = publishedBackend_;
+    return result;
+}
+
+WgcCaptureStatus WindowTexture::GetWgcStatus() const
+{
+    const auto capture = windowsGraphicsCapture_.lock();
+    return capture ? capture->GetStatus() : WgcCaptureStatus{};
+}
+
 BYTE* WindowTexture::GetBuffer()
 {
-    if (buffer_.Empty()) return nullptr;
-
     std::lock_guard<std::mutex> lock(bufferMutex_);
+    if (buffer_.Empty()) return nullptr;
 
     bufferForGetBuffer_.ExpandIfNeeded(buffer_.Size());
     memcpy(bufferForGetBuffer_.Get(), buffer_.Get(), buffer_.Size());
@@ -746,6 +810,7 @@ UINT WindowTexture::GetPixel(int x, int y) const
 
 bool WindowTexture::GetPixels(BYTE* output, int x, int y, int width, int height) const
 {
+    std::lock_guard<std::mutex> lock(bufferMutex_);
     if (!buffer_)
     {
         Debug::Error("WindowTexture::GetPixels() => buffer has not been set yet.");
@@ -760,8 +825,6 @@ bool WindowTexture::GetPixels(BYTE* output, int x, int y, int width, int height)
         Debug::Error("The buffer width=", bufferWidth_, ", height=", bufferHeight_);
         return false;
     }
-
-    std::lock_guard<std::mutex> lock(bufferMutex_);
 
     constexpr int rgba = 4;
     for (int j = 0; j < height; ++j)

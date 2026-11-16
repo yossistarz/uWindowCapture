@@ -20,6 +20,7 @@ class WindowManager
 {
 #ifdef UWC_NATIVE_TESTS
 friend struct CursorRegressionTests;
+friend struct CaptureThroughputTests;
 #endif
     UWC_SINGLETON(WindowManager)
 

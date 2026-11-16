@@ -438,6 +438,28 @@ extern "C"
         return CaptureMode::None;
     }
 
+    UNITY_INTERFACE_EXPORT bool UNITY_INTERFACE_API UwcGetWindowCaptureStatistics(int id, WindowCaptureStatistics* result)
+    {
+        if (!result) return false;
+        if (auto window = GetWindow(id))
+        {
+            *result = window->GetCaptureStatistics();
+            return true;
+        }
+        return false;
+    }
+
+    UNITY_INTERFACE_EXPORT bool UNITY_INTERFACE_API UwcGetWindowWgcStatus(int id, WgcCaptureStatus* result)
+    {
+        if (!result) return false;
+        if (auto window = GetWindow(id))
+        {
+            *result = window->GetWgcStatus();
+            return true;
+        }
+        return false;
+    }
+
     UNITY_INTERFACE_EXPORT void UNITY_INTERFACE_API UwcSetWindowCaptureMode(int id, CaptureMode mode)
     {
         if (auto window = GetWindow(id))

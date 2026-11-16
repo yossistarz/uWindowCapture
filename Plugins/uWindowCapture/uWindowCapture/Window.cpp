@@ -282,6 +282,7 @@ const std::string& Window::GetClass() const
 void Window::SetWindowTexture(ID3D11Texture2D* ptr, UINT width, UINT height, bool mipSrgb)
 {
     windowTexture_->SetUnityTexturePtr(ptr, width, height, mipSrgb);
+    if (ptr) hasNewWindowTextureUploaded_ = true;
 }
 
 
@@ -411,42 +412,79 @@ void Window::Capture()
 {
     // Run this scope in the thread loop managed by CaptureManager.
 
-    if (hasNewWindowTextureCaptured_)
+    if (hasNewWindowTextureCaptured_.exchange(true))
     {
-        // If it is called before Upload(), skip this frame.
+        ++busyCaptureCount_;
         return;
     }
 
+    if (pendingCapturePriority_.exchange(-1) < 0)
+    {
+        CompleteCapture();
+        return;
+    }
     if (!IsWindow() || !IsVisible())
     {
+        CompleteCapture();
         return;
     }
 
     UWC_SCOPE_TIMER(WindowCapture)
 
+    ++captureAttemptCount_;
     if (windowTexture_->Capture())
     {
-        hasNewWindowTextureCaptured_ = true;
-
         if (auto& uploader = WindowManager::GetUploadManager())
         {
             uploader->RequestUploadWindow(id_);
         }
+        else
+        {
+            Debug::Error(__FUNCTION__, " => Upload manager is unavailable.");
+            CompleteCapture();
+        }
     }
+    else CompleteCapture();
 }
 
 
 void Window::Upload()
 {
     // Run this scope in the thread loop managed by UploadManager.
+    if (!hasNewWindowTextureCaptured_) return;
     if (windowTexture_->Upload())
     {
         hasNewWindowTextureUploaded_ = true;
     }
+    else if (windowTexture_->IsWaitingForCaptureFrame()) return;
 
-    hasNewWindowTextureCaptured_ = false;
+    CompleteCapture();
 }
 
+void Window::CompleteCapture()
+{
+    hasNewWindowTextureCaptured_ = false;
+    const int pending = pendingCapturePriority_;
+    if (pending >= 0)
+        if (auto& capture = WindowManager::GetCaptureManager())
+            capture->QueueCapture(id_, static_cast<CapturePriority>(pending));
+}
+
+
+WindowCaptureStatistics Window::GetCaptureStatistics() const
+{
+    auto result = windowTexture_->GetStatistics();
+    result.requests = captureRequestCount_;
+    result.captureAttempts = captureAttemptCount_;
+    result.busyCaptures = busyCaptureCount_;
+    result.reserved = pendingCapturePriority_.load() >= 0 || hasNewWindowTextureCaptured_.load();
+    return result;
+}
+
+WgcCaptureStatus Window::GetWgcStatus() const
+{
+    return windowTexture_->GetWgcStatus();
+}
 
 void Window::CaptureIcon()
 {
@@ -486,16 +524,13 @@ void Window::Render()
 {
     // Run this scope in the unity rendering thread.
 
-    if (hasNewWindowTextureUploaded_)
+    if (hasNewWindowTextureUploaded_.exchange(false))
     {
-        hasNewWindowTextureUploaded_ = false;
         windowTexture_->Render();
-        hasNewWindowTextureCaptured_ = false;
     }
 
-    if (hasNewIconTextureUploaded_)
+    if (hasNewIconTextureUploaded_.exchange(false))
     {
-        hasNewIconTextureUploaded_ = false;
         iconTexture_->RenderOnce();
     }
 }

@@ -52,12 +52,9 @@ void WindowManager::Finalize()
 }
 
 
-void WindowManager::Update(float dt)
+void WindowManager::Update(float)
 {
-    if (windowsGraphicsCaptureManager_) 
-    {
-        windowsGraphicsCaptureManager_->UpdateFromMainThread(dt);
-    }
+    // Managed ABI compatibility: capture lifecycle timing now belongs to the worker's monotonic clock.
 }
 
 

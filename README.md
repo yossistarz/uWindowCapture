@@ -71,3 +71,53 @@ capture/readback must also be tested by the consuming application. The
 WindowsAR application packages this unpushed source and both architectures
 with `Tools\Build-CaptureMipPackage.ps1`; its local UPM tarball is portable
 and includes the MIT license. No PackageCache edits are needed.
+
+`1.1.0-windowsar.6` keeps WGC frame-pool draining separate from consumer
+capture cadence. Frame-arrival events retain at most one latest frame; replaced
+frames are closed immediately and consumed frames remain owned through the GPU
+copy/flush. Capture, upload, cursor and icon workers wake on queued work instead
+of polling every 100 microseconds. Bounded weighted batches prevent low-priority
+starvation, and a request arriving during an upload remains coalesced until the
+upload completes. A successful but unchanged source no longer triggers a
+one-second session restart; unrequested sessions still stop.
+Rebinding a target schedules a render of the retained shared image, so changing
+mip/SBS policy does not require an unchanged source to produce another frame.
+
+`Lib.GetWindowCaptureStatistics` reports requests, busy capture attempts, actual
+source arrivals, uploads, publications, backend and the published source's QPC
+time in 100-nanosecond units. It uses counters, not GPU/CPU pixel readback.
+`Tools\Test-NativeCapture.ps1` exercises changing owned windows, real production
+workers and mip targets without a headset or a Unity test-only render pump.
+Reported native-process CPU includes its controlled source painter; it is not
+the CPU cost of the full WindowsAR application.
+
+`1.1.0-windowsar.8` preserves failed WGC objects instead of permanently losing
+the monitor GPU path. Both interop creation HRESULTs are checked, and active
+Auto captures retry failures after 1, 2, 4, 8, 16, then at most every 30 seconds.
+Idle sources and explicitly selected BitBlt/PrintWindow do not drive WGC retries.
+Access denial is reported, not bypassed; unsupported systems retain compatibility
+capture without repeated activation attempts.
+
+Auto continues compatibility capture until a recovered session produces a real
+frame. Desktop CPU/GDI buffers are released on the GPU handoff. Session failures,
+closed items and a missing first frame enter bounded recovery; an unchanged source
+after its first frame remains valid. Lifecycle timing uses the worker's monotonic
+clock, not Unity updates or a main-thread lock around WinRT session teardown.
+
+`Lib.GetWindowWgcStatus` exposes the target handle, last failure HRESULT/stage,
+item/session attempts, consecutive failures, recovery count, retry countdown,
+availability, session and support state. `WindowCaptureStatusChanged` messages
+produce failure/recovery logs on the Unity thread even when verbose diagnostics
+are off. Monitor IDs and capture IDs are distinct from the shared desktop HWND.
+The existing frame-statistics ABI is unchanged.
+Its former reserved slot exposes `capturePending` to distinguish a drained
+pipeline from a queued/in-flight request.
+
+Native regressions inject access denial and session failure, verify capped
+backoff and explicit-mode/idle behavior, then recover a real monitor. The
+throughput runner's `-Windows 1 -Desktop -InitialWgcFailures 2` additionally
+requires actual BitBlt and WGC publications during the same capture lifetime.
+
+The `.8` source is maintained on `feature/capture-throughput-stability`.
+WindowsAR consumes its portable package with both native architectures; this
+does not require changing the upstream-compatible `master` branch.

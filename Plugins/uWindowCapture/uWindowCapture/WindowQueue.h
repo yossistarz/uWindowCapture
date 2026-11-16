@@ -12,6 +12,6 @@ public:
     bool Empty() const;
 
 private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::deque<int> queue_;
 };

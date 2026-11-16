@@ -1,3 +1,4 @@
+param([switch]$WorkerCadence)
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path $PSScriptRoot -Parent
 $source = Join-Path $repository 'Plugins\uWindowCapture\uWindowCapture'
@@ -16,5 +17,6 @@ $build = 'call "' + $vcvars + '" >nul && cd /d "' + $output +
     ' /Fe:NativeCursorTests.exe /link windowsapp.lib d3d11.lib dxgi.lib dwmapi.lib user32.lib gdi32.lib ole32.lib'
 & $env:ComSpec /c $build
 if ($LASTEXITCODE -ne 0) { throw 'Native cursor regression build failed.' }
-& (Join-Path $output 'NativeCursorTests.exe')
+if ($WorkerCadence) { & (Join-Path $output 'NativeCursorTests.exe') --worker-cadence }
+else { & (Join-Path $output 'NativeCursorTests.exe') }
 if ($LASTEXITCODE -ne 0) { throw 'Native cursor regression tests failed.' }

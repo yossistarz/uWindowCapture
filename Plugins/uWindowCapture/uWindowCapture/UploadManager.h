@@ -15,6 +15,7 @@ class UploadManager
 {
 #ifdef UWC_NATIVE_TESTS
 friend struct CursorRegressionTests;
+friend struct CaptureThroughputTests;
 #endif
 public:
     using DevicePtr = Microsoft::WRL::ComPtr<ID3D11Device>;
@@ -28,13 +29,14 @@ public:
     TexturePtr CreateCompatibleSharedTexture(const TexturePtr& texture);
     void RequestUploadWindow(int id);
     void RequestUploadIcon(int id);
+    void RequestUploadCursor();
     void StartUploadThread();
     void StopUploadThread();
 
 private:
     void CreateDevice();
 
-    bool isReady_ = false;
+    std::atomic<bool> isReady_ = false;
     DevicePtr device_;
     std::thread initThread_;
     ThreadLoop threadLoop_ = { L"uWindowCapture - Upload Thread" };

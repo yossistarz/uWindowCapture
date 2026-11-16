@@ -40,6 +40,7 @@ public enum MessageType
     WindowSizeChanged = 3,
     IconCaptured = 4,
     CursorCaptured = 5,
+    WindowCaptureStatusChanged = 6,
     Error = 1000,
     TextureNullError = 1001,
     TextureSizeError = 1002,
@@ -63,6 +64,37 @@ public struct Point
     public int x;
     [MarshalAs(UnmanagedType.I4)]
     public int y;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct WindowCaptureStatistics
+{
+    public ulong requests, captureAttempts, busyCaptures, sourceFrames, uploads, publications;
+    public long publishedSourceTime;
+    public CaptureMode backend;
+    public int reserved;
+    public bool capturePending => reserved != 0;
+}
+
+public enum WgcFailureStage
+{
+    None = 0, CreateItem = 1, StartSession = 2, ItemClosed = 3, ReadFrame = 4, FirstFrame = 5
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct WgcCaptureStatus
+{
+    public ulong itemAttempts, sessionAttempts, recoveries, retryAfterMilliseconds, targetHandle;
+    public int lastError;
+    public WgcFailureStage failureStage;
+    public int consecutiveFailures, available, started, supported;
+
+    public override string ToString()
+        => string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            "target=0x{0:X} stage={1} HRESULT=0x{2:X8} itemAttempts={3} sessionAttempts={4} " +
+            "failures={5} retryMs={6} recoveries={7} available={8} started={9} supported={10}",
+            targetHandle, failureStage, unchecked((uint)lastError), itemAttempts, sessionAttempts,
+            consecutiveFailures, retryAfterMilliseconds, recoveries, available, started, supported);
 }
 
 public static class Lib
@@ -114,6 +146,12 @@ public static class Lib
     public static extern void RequestUpdateWindowTitle(int id);
     [DllImport(name, EntryPoint = "UwcRequestCaptureWindow")]
     public static extern void RequestCaptureWindow(int id, CapturePriority priority);
+    [DllImport(name, EntryPoint = "UwcGetWindowCaptureStatistics")]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool GetWindowCaptureStatistics(int id, out WindowCaptureStatistics statistics);
+    [DllImport(name, EntryPoint = "UwcGetWindowWgcStatus")]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool GetWindowWgcStatus(int id, out WgcCaptureStatus status);
     [DllImport(name, EntryPoint = "UwcRequestCaptureIcon")]
     public static extern void RequestCaptureIcon(int id);
     [DllImport(name, EntryPoint = "StartCaptureWindow")]

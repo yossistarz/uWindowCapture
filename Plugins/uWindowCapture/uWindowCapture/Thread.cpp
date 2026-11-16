@@ -35,12 +35,13 @@ ThreadLoop::~ThreadLoop()
 }
 
 
-void ThreadLoop::Start(const ThreadFunc& func, const microseconds& interval)
+void ThreadLoop::Start(const ThreadFunc& func, const microseconds& interval, WaitMode waitMode)
 {
     if (isRunning_) return;
 
     loopFunc_ = func;
     interval_ = interval;
+    waitMode_ = waitMode;
     isRunning_ = true;
 
     if (thread_.joinable())
@@ -58,8 +59,22 @@ void ThreadLoop::Start(const ThreadFunc& func, const microseconds& interval)
 
         while (isRunning_)
         {
-            ScopedThreadSleeper sleeper(interval_);
-            loopFunc_();
+            if (waitMode_ == WaitMode::OnRequest)
+            {
+                std::unique_lock<std::mutex> lock(wakeMutex_);
+                const auto ready = [this] { return wakeRequested_ || !isRunning_; };
+                if (interval_ == microseconds::zero()) wakeCondition_.wait(lock, ready);
+                else wakeCondition_.wait_for(lock, interval_, ready);
+                if (!isRunning_) break;
+                wakeRequested_ = false;
+                lock.unlock();
+                loopFunc_();
+            }
+            else
+            {
+                ScopedThreadSleeper sleeper(interval_);
+                loopFunc_();
+            }
         }
 
         if (finalizerFunc_) 
@@ -78,7 +93,7 @@ void ThreadLoop::Start(const ThreadFunc& func, const microseconds& interval)
 
 void ThreadLoop::Restart()
 {
-    Start(loopFunc_, interval_);
+    Start(loopFunc_, interval_, waitMode_);
 }
 
 
@@ -86,12 +101,25 @@ void ThreadLoop::Stop()
 {
     if (!isRunning_) return;
 
-    isRunning_ = false;
+    {
+        std::lock_guard<std::mutex> lock(wakeMutex_);
+        isRunning_ = false;
+    }
+    wakeCondition_.notify_all();
 
     if (thread_.joinable())
     {
         thread_.join();
     }
+}
+
+void ThreadLoop::Wake()
+{
+    {
+        std::lock_guard<std::mutex> lock(wakeMutex_);
+        wakeRequested_ = true;
+    }
+    wakeCondition_.notify_one();
 }
 
 

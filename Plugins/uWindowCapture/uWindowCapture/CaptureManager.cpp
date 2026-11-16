@@ -2,6 +2,7 @@
 #include "CaptureManager.h"
 #include "WindowManager.h"
 #include "Window.h"
+#include "WindowTexture.h"
 #include "Debug.h"
 #include "Util.h"
 
@@ -11,7 +12,8 @@ using namespace Microsoft::WRL;
 
 namespace
 {
-    constexpr auto kLoopMinTime = std::chrono::microseconds(100);
+    constexpr auto kMaintenanceInterval = std::chrono::milliseconds(250);
+    constexpr int kBatchLimit = 32;
 }
 
 
@@ -30,33 +32,13 @@ CaptureManager::CaptureManager()
 
     windowCaptureThreadLoop_.Start([this] 
     {
-        // at first, check the high-priority queue.
-        int id = highPriorityQueue_.Dequeue();
-
-        // move an item in the mid-priority queue to the high-priority queue to give a chance to it.
-        if (id >= 0 && !middlePriorityQueue_.Empty())
+        for (int processed = 0; processed < kBatchLimit; ++processed)
         {
-            const auto midId = middlePriorityQueue_.Dequeue();
-            highPriorityQueue_.Enqueue(midId);
-        }
-
-        // second, check the mid-priority queue.
-        if (id < 0)
-        {
-            id = middlePriorityQueue_.Dequeue();
-        }
-
-        // at last, check the low-priority queue.
-        if (id < 0)
-        {
-            id = lowPriorityQueue_.Dequeue();
-        }
-
-        // update the window if needed.
-        if (id >= 0)
-        {
+            const int id = DequeueNextWindow();
+            if (id < 0) break;
             if (auto window = WindowManager::Get().GetWindow(id))
             {
+                window->windowTexture_->KeepCaptureAlive();
                 window->Capture();
             }
         }
@@ -65,19 +47,23 @@ CaptureManager::CaptureManager()
         {
             wgcManager->UpdateFromCaptureThread();
         }
-    }, kLoopMinTime);
+        if (!highPriorityQueue_.Empty() || !middlePriorityQueue_.Empty() || !lowPriorityQueue_.Empty())
+            windowCaptureThreadLoop_.Wake();
+    }, kMaintenanceInterval, ThreadLoop::WaitMode::OnRequest);
 
     iconCaptureThreadLoop_.Start([this] 
     {
-        int id = iconQueue_.Dequeue();
-        if (id >= 0)
+        for (int processed = 0; processed < kBatchLimit; ++processed)
         {
+            const int id = iconQueue_.Dequeue();
+            if (id < 0) break;
             if (auto window = WindowManager::Get().GetWindow(id))
             {
                 window->CaptureIcon();
             }
         }
-    }, kLoopMinTime);
+        if (!iconQueue_.Empty()) iconCaptureThreadLoop_.Wake();
+    }, ThreadLoop::microseconds::zero(), ThreadLoop::WaitMode::OnRequest);
 }
 
 
@@ -89,6 +75,35 @@ CaptureManager::~CaptureManager()
 
 
 void CaptureManager::RequestCapture(int id, CapturePriority priority)
+{
+    if (auto window = WindowManager::Get().GetWindow(id))
+    {
+        ++window->captureRequestCount_;
+        int current = window->pendingCapturePriority_;
+        const int requested = static_cast<int>(priority);
+        while ((current < 0 || requested < current) &&
+            !window->pendingCapturePriority_.compare_exchange_weak(current, requested)) {}
+        QueueCapture(id, priority);
+    }
+}
+
+
+int CaptureManager::DequeueNextWindow()
+{
+    WindowQueue* priorities[] = { &highPriorityQueue_, &highPriorityQueue_, &highPriorityQueue_,
+        &highPriorityQueue_, &middlePriorityQueue_, &middlePriorityQueue_, &lowPriorityQueue_ };
+    for (unsigned checked = 0; checked < std::size(priorities); ++checked)
+    {
+        auto queue = priorities[nextPriority_];
+        nextPriority_ = (nextPriority_ + 1) % std::size(priorities);
+        const int id = queue->Dequeue();
+        if (id >= 0) return id;
+    }
+    return -1;
+}
+
+
+void CaptureManager::QueueCapture(int id, CapturePriority priority)
 {
     switch (priority)
     {
@@ -108,10 +123,12 @@ void CaptureManager::RequestCapture(int id, CapturePriority priority)
             break;
         }
     }
+    windowCaptureThreadLoop_.Wake();
 }
 
 
 void CaptureManager::RequestCaptureIcon(int id)
 {
     iconQueue_.Enqueue(id);
+    iconCaptureThreadLoop_.Wake();
 }

@@ -29,9 +29,11 @@ void Cursor::StartCapture()
         if (isCaptureRequested_)
         {
             isCaptureRequested_ = false;
-            Capture();
+            if (Capture())
+                if (auto& uploader = WindowManager::GetUploadManager())
+                    uploader->RequestUploadCursor();
         }
-    }, std::chrono::microseconds(100));
+    }, ThreadLoop::microseconds::zero(), ThreadLoop::WaitMode::OnRequest);
 }
 
 
@@ -44,6 +46,7 @@ void Cursor::StopCapture()
 void Cursor::RequestCapture()
 {
     isCaptureRequested_ = true;
+    threadLoop_.Wake();
 }
 
 
